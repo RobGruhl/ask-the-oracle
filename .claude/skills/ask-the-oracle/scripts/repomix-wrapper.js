@@ -35,7 +35,7 @@ export class RepomixWrapper {
         workingDir,
         {
           output: outputPath,
-          include: patterns,  // Patterns as include option
+          include: Array.isArray(patterns) ? patterns.join(',') : patterns,  // Comma-separated patterns
           style: this.config.style,
           compress: this.config.compress,
           outputShowLineNumbers: this.config.includeLineNumbers,
