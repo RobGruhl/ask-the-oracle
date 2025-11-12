@@ -30,8 +30,9 @@ export class RepomixWrapper {
     const outputPath = options.output || join('/tmp', `oracle-context-${Date.now()}.xml`);
 
     try {
+      // runCli expects paths array as first arg - use empty array when using include patterns
       const result = await runCli(
-        ['.'],  // Root path - patterns specified via include option
+        [],  // Empty paths - patterns specified via include option
         workingDir,
         {
           output: outputPath,
