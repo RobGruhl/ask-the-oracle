@@ -1,0 +1,36 @@
+# API Keys and Configuration
+.oraclerc
+
+# Oracle History
+.claude/oracle-history/
+.oracle-request.json
+
+# Node
+node_modules/
+package-lock.json
+yarn.lock
+bun.lockb
+
+# Repomix Output
+*.xml
+*.repomix
+
+# Temporary Files
+/tmp/
+*.tmp
+*.log
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build Output
+dist/
+build/
