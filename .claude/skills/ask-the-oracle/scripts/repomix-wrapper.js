@@ -31,10 +31,11 @@ export class RepomixWrapper {
 
     try {
       const result = await runCli(
-        patterns,
+        ['.'],  // Root path - patterns specified via include option
         workingDir,
         {
           output: outputPath,
+          include: patterns,  // Patterns as include option
           style: this.config.style,
           compress: this.config.compress,
           outputShowLineNumbers: this.config.includeLineNumbers,
