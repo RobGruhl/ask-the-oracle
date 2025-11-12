@@ -44,25 +44,74 @@ A Claude Code skill that enables deep code analysis by submitting questions to O
 - **Provider Abstraction**: Easy addition of future premium models
 - **Cost Optimization**: Per-provider budgets and smart model selection
 
-## Quick Start
+## Installation
 
-### Prerequisites
+### Method 1: Claude Code Plugin (Recommended)
 
-- Node.js 18+ or Bun 1.0+
-- OpenAI API key with GPT-5 Pro access
-- Claude Code installed
-- Sufficient API credits ($10+ recommended)
-
-### Installation
+Install Ask the Oracle as a Claude Code plugin for automatic dependency management and easy updates:
 
 ```bash
+# Search for the plugin in the marketplace
+/plugin marketplace search ask-the-oracle
+
+# Install from the marketplace (when published)
+/plugin marketplace add robgruhl/ask-the-oracle
+/plugin install ask-the-oracle@robgruhl
+
+# Restart Claude Code to load the plugin
+/restart
+```
+
+Once installed, configure your API key:
+
+```bash
+# Copy the example configuration
+cp .oraclerc.example .oraclerc
+
+# Edit .oraclerc and add your OpenAI API key
+# The plugin will automatically detect this configuration in any project
+```
+
+### Method 2: Manual Global Installation
+
+Install as a global skill available to all your Claude Code projects:
+
+```bash
+# Clone the repository
+git clone https://github.com/robgruhl/ask-the-oracle.git ~/.claude/global-skills/ask-the-oracle
+
 # Install dependencies
+cd ~/.claude/global-skills/ask-the-oracle
 bun install  # or npm install
 
 # Configure API key
-cp .oraclerc.example .oraclerc
-# Edit .oraclerc and add your OpenAI API key
+cp .oraclerc.example ~/.oraclerc
+# Edit ~/.oraclerc and add your OpenAI API key
 ```
+
+### Method 3: Project-Local Installation
+
+Install in a specific project only:
+
+```bash
+# Clone into your project's skills directory
+git clone https://github.com/robgruhl/ask-the-oracle.git .claude/skills/ask-the-oracle
+
+# Install dependencies
+cd .claude/skills/ask-the-oracle
+bun install  # or npm install
+
+# Configure API key (project-specific)
+cp .oraclerc.example ../../.oraclerc
+# Edit .oraclerc in your project root
+```
+
+### Prerequisites
+
+- **Claude Code**: Version 1.0.0 or later
+- **Node.js**: Version 18.0.0 or later (or Bun 1.0+)
+- **OpenAI API Key**: With GPT-5 Pro access
+- **API Credits**: $10+ recommended for testing
 
 ### Usage
 
@@ -73,6 +122,17 @@ Simply ask Claude a complex question about your code:
 ```
 
 Claude will automatically invoke the Oracle skill and guide you through the process.
+
+Or use the skill directly in CLI mode:
+
+```bash
+# From your project directory
+node ~/.claude/global-skills/ask-the-oracle/skills/ask-the-oracle/scripts/oracle.js \
+  "src/**/*.js" "*.md" -- "Review the architecture of this project"
+
+# Skip confirmation prompt for automation
+node oracle.js --yes "src/**/*.py" -- "Find potential security issues"
+```
 
 ## Use Cases
 
@@ -99,21 +159,32 @@ Pricing: $15/M input, $120/M output, $15/M reasoning (GPT-5 Pro, Nov 2025)
 
 ```
 ask-the-oracle/
-├── README.md                   # This file
-├── PRD.md                      # Product Requirements Document
-├── docs/                       # Reference documentation
-│   ├── repomix-reference.md
-│   ├── openai-responses-api.md
-│   └── claude-skills-reference.md
-├── .claude/
-│   └── skills/
-│       └── ask-the-oracle/     # The skill (to be implemented)
-│           ├── SKILL.md
-│           ├── scripts/
-│           ├── templates/
-│           └── config/
-├── package.json
-└── .oraclerc.example           # Configuration template
+├── README.md                    # This file
+├── PRD.md                       # Product Requirements Document
+├── LICENSE                      # MIT License
+├── package.json                 # npm dependencies
+├── .oraclerc.example            # Configuration template
+├── .claude-plugin/              # Plugin metadata
+│   └── plugin.json              # Plugin manifest for marketplace
+├── skills/                      # Skill implementation
+│   └── ask-the-oracle/
+│       ├── SKILL.md             # Skill documentation
+│       ├── scripts/
+│       │   ├── oracle.js        # Main orchestrator
+│       │   ├── repomix-wrapper.js
+│       │   ├── config-validator.js
+│       │   ├── history-manager.js
+│       │   └── providers/
+│       │       ├── base-provider.js
+│       │       └── openai.js
+│       ├── templates/
+│       │   └── context-prompt.txt
+│       └── config/
+│           └── defaults.json
+└── docs/                        # Reference documentation
+    ├── repomix-reference.md
+    ├── openai-responses-api.md
+    └── claude-skills-reference.md
 ```
 
 ## Documentation
@@ -125,14 +196,16 @@ ask-the-oracle/
 
 ## Development Status
 
-**Current Stage**: Planning & Documentation
+**Current Stage**: V1.0 Complete - Plugin Conversion
 
 - [x] Requirements gathering
 - [x] Documentation research
 - [x] PRD creation
-- [ ] Skill implementation
-- [ ] Testing & refinement
-- [ ] Public release
+- [x] Skill implementation
+- [x] Testing & refinement (all P0 fixes validated)
+- [x] Production-ready CLI
+- [ ] Plugin marketplace submission
+- [ ] Public release announcement
 
 ## Workflow
 
@@ -341,10 +414,69 @@ For issues, questions, or suggestions:
 - Check the documentation in `./docs/`
 - Review the PRD for detailed specifications
 
+## Troubleshooting
+
+### "No files matched the specified patterns"
+
+If you see this error, check:
+1. **Pattern syntax**: Use quotes around globs: `"src/**/*.js"` not `src/**/*.js`
+2. **Working directory**: Patterns are relative to your current directory
+3. **Git ignore**: Files may be excluded by `.gitignore` or `.repomixignore`
+4. **Test manually**: Run `npx repomix --include "your-pattern" --output test.txt` to verify
+
+### "Invalid API key" or Authentication Errors
+
+1. Verify your API key in `.oraclerc` starts with `sk-...`
+2. Check that your account has GPT-5 Pro access enabled
+3. Ensure you have sufficient API credits
+
+### Requests Timeout
+
+If requests consistently timeout:
+1. Increase `maxWaitMinutes` in `.oraclerc` (default: 25 minutes)
+2. Check OpenAI API status at status.openai.com
+3. Reduce the size of your code context
+
+### Plugin Not Loading
+
+If the skill doesn't auto-invoke:
+1. Verify installation: `/plugin list`
+2. Restart Claude Code: `/restart`
+3. Check logs for errors: Look for skill loading messages
+4. Try manual global installation as fallback
+
+## Upgrading
+
+### Plugin Installation
+```bash
+# Update to latest version
+/plugin update ask-the-oracle@robgruhl
+/restart
+```
+
+### Manual Installation
+```bash
+cd ~/.claude/global-skills/ask-the-oracle  # or your install location
+git pull origin main
+bun install  # or npm install
+```
+
+## Uninstalling
+
+### Plugin Installation
+```bash
+/plugin uninstall ask-the-oracle@robgruhl
+```
+
+### Manual Installation
+```bash
+rm -rf ~/.claude/global-skills/ask-the-oracle
+```
+
 ---
 
-**Status**: Ready for Implementation 🚀
+**Status**: Production Ready - V1.0 Complete ✅
 
-**Version**: 0.1.0 (Planning Phase)
+**Version**: 1.0.0 (Plugin Release)
 
 **Last Updated**: 2025-11-11

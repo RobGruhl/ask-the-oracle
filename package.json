@@ -1,9 +1,9 @@
 {
   "name": "ask-the-oracle",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Claude Code skill for consulting premium AI models (GPT-5 Pro, Gemini, Opus) for deep code analysis",
   "type": "module",
-  "main": ".claude/skills/ask-the-oracle/scripts/oracle.js",
+  "main": "skills/ask-the-oracle/scripts/oracle.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },

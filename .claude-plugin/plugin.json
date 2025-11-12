@@ -1,0 +1,36 @@
+{
+  "name": "ask-the-oracle",
+  "displayName": "Ask the Oracle",
+  "description": "Consult premium AI models (GPT-5 Pro, Gemini, Claude Opus) for deep code analysis with cost tracking, background mode, and history",
+  "version": "1.0.0",
+  "author": {
+    "name": "Rob Gruhl",
+    "url": "https://github.com/robgruhl/ask-the-oracle"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/robgruhl/ask-the-oracle"
+  },
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "skill",
+    "gpt-5",
+    "openai",
+    "code-analysis",
+    "ai",
+    "oracle",
+    "repomix",
+    "gemini",
+    "opus"
+  ],
+  "engines": {
+    "claude": ">=1.0.0",
+    "node": ">=18.0.0"
+  },
+  "categories": [
+    "AI Tools",
+    "Code Analysis",
+    "Productivity"
+  ]
+}
