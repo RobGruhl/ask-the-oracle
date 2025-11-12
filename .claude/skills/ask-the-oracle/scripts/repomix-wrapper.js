@@ -21,7 +21,7 @@ export class RepomixWrapper {
 
   /**
    * Pack selected files/patterns into AI-friendly format
-   * @param {string[]} patterns - Glob patterns (e.g., ['src/**/*.js', 'lib/**/*.ts'])
+   * @param {string[]} patterns - Glob patterns
    * @param {string} workingDir - Working directory (default: cwd)
    * @param {Object} options - Additional repomix options
    * @returns {Promise<Object>} Result with output path, token count, file count
