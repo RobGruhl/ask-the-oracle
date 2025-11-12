@@ -30,13 +30,18 @@ export class RepomixWrapper {
     const outputPath = options.output || join('/tmp', `oracle-context-${Date.now()}.xml`);
 
     try {
-      // runCli expects paths array as first arg - use empty array when using include patterns
+      // Convert patterns to array if needed
+      const patternArray = Array.isArray(patterns) ? patterns : [patterns];
+
+      // Use include option for file patterns/names with current directory as path
+      // runCli needs a directory to scan - empty array results in 0 files
+      // include option takes comma-separated string (not array)
       const result = await runCli(
-        [],  // Empty paths - patterns specified via include option
+        ['.'],  // Current directory to scan
         workingDir,
         {
           output: outputPath,
-          include: Array.isArray(patterns) ? patterns.join(',') : patterns,  // Comma-separated patterns
+          include: patternArray.join(','),  // Comma-separated string
           style: this.config.style,
           compress: this.config.compress,
           outputShowLineNumbers: this.config.includeLineNumbers,
@@ -49,10 +54,14 @@ export class RepomixWrapper {
 
       return {
         outputPath,
-        tokenCount: result.totalTokens || 0,
-        fileCount: result.fileCount || 0,
-        files: result.files || [],
-        totalCharacters: result.totalCharacters || 0
+        tokenCount: result.packResult?.totalTokens || 0,
+        fileCount: result.packResult?.totalFiles || 0,
+        files: Object.entries(result.packResult?.fileTokenCounts || {}).map(([path, tokens]) => ({
+          path,
+          tokens,
+          characters: result.packResult?.fileCharCounts?.[path] || 0
+        })),
+        totalCharacters: result.packResult?.totalCharacters || 0
       };
     } catch (error) {
       throw new Error(`Repomix packing failed: ${error.message}`);

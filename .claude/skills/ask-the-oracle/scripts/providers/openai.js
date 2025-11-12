@@ -61,7 +61,6 @@ export class OpenAIProvider extends BaseProvider {
       const response = await this.client.responses.create({
         model: this.model,
         background: true, // Enable long-running mode
-        temperature: options.temperature ?? this.config.temperature ?? 0.2,
         max_output_tokens: options.maxOutputTokens ?? 16000,
         input: [
           {
