@@ -33,24 +33,46 @@ export class RepomixWrapper {
       // Convert patterns to array if needed
       const patternArray = Array.isArray(patterns) ? patterns : [patterns];
 
-      // Use include option for file patterns/names with current directory as path
-      // runCli needs a directory to scan - empty array results in 0 files
-      // include option takes comma-separated string (not array)
-      const result = await runCli(
-        ['.'],  // Current directory to scan
-        workingDir,
-        {
-          output: outputPath,
-          include: patternArray.join(','),  // Comma-separated string
-          style: this.config.style,
-          compress: this.config.compress,
-          outputShowLineNumbers: this.config.includeLineNumbers,
-          removeComments: this.config.removeComments,
-          tokenCount: true,
-          quiet: true,
-          ...options
+      // Helper to attempt packing with a given include format
+      const attemptPack = async (include) => {
+        return await runCli(
+          ['.'],  // Current directory to scan
+          workingDir,
+          {
+            output: outputPath,
+            include,
+            style: this.config.style,
+            compress: this.config.compress,
+            outputShowLineNumbers: this.config.includeLineNumbers,
+            removeComments: this.config.removeComments,
+            tokenCount: true,
+            quiet: true,
+            ...options
+          }
+        );
+      };
+
+      // Try comma-separated string first (current repomix version expects this)
+      let result;
+      try {
+        result = await attemptPack(patternArray.join(','));
+      } catch (error) {
+        // If that fails, try array format (future repomix versions may prefer this)
+        if (error.message.includes('split is not a function')) {
+          result = await attemptPack(patternArray);
+        } else {
+          throw error;
         }
-      );
+      }
+
+      // If no files matched with comma string, try array as fallback
+      if (!result.packResult?.totalFiles) {
+        try {
+          result = await attemptPack(patternArray);
+        } catch (error) {
+          // Ignore errors on fallback attempt
+        }
+      }
 
       return {
         outputPath,

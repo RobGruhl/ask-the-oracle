@@ -23,6 +23,7 @@ class Oracle {
     this.configPath = configPath;
     this.config = null;
     this.provider = null;
+    this.activeRequestId = null;
   }
 
   /**
@@ -105,6 +106,21 @@ class Oracle {
       throw error;
     }
 
+    // Fail fast if no files matched
+    if (packedResult.metadata.fileCount === 0) {
+      console.log(chalk.red.bold('\n❌ No files matched the specified patterns\n'));
+      console.log(chalk.yellow('Patterns attempted:'));
+      patterns.forEach(p => console.log(chalk.yellow(`  - ${p}`)));
+      console.log(chalk.yellow(`\nWorking directory: ${process.cwd()}`));
+      console.log(chalk.yellow('\nPossible causes:'));
+      console.log(chalk.yellow('  - Patterns are relative but files are elsewhere'));
+      console.log(chalk.yellow('  - Files are excluded by .gitignore or .repomixignore'));
+      console.log(chalk.yellow('  - Pattern syntax is incorrect (use quotes around globs)'));
+      console.log(chalk.yellow('\nTest repomix manually with:'));
+      console.log(chalk.cyan(`  npx repomix --include "${patterns.join(',')}" --output test.txt\n`));
+      throw new Error('No files matched patterns');
+    }
+
     // Phase 2: Estimate cost
     const estimate = CostCalculator.estimateCost(
       this.provider,
@@ -155,6 +171,9 @@ class Oracle {
 
       console.log(chalk.green(`✓ Submitted (Request ID: ${response.id})`));
 
+      // Track active request for cancellation
+      this.activeRequestId = response.id;
+
       // Save request metadata immediately (for resume capability)
       await this.saveToHistory(response, {
         question,
@@ -166,17 +185,22 @@ class Oracle {
       throw error;
     }
 
-    // Phase 4: Poll for completion
-    response = await this.pollForCompletion(response.id, startTime);
+    try {
+      // Phase 4: Poll for completion
+      response = await this.pollForCompletion(response.id, startTime);
 
-    // Phase 5: Update history with final response
-    await this.saveToHistory(response, {
-      question,
-      patterns,
-      packedMetadata: packedResult.metadata
-    });
+      // Phase 5: Update history with final response
+      await this.saveToHistory(response, {
+        question,
+        patterns,
+        packedMetadata: packedResult.metadata
+      });
 
-    return response;
+      return response;
+    } finally {
+      // Clear active request ID
+      this.activeRequestId = null;
+    }
   }
 
   /**
@@ -265,7 +289,17 @@ class Oracle {
       // Status is queued or in_progress, continue polling
     }
 
+    // Timeout exceeded - cancel the request
     spinner.fail(`Timeout: exceeded ${maxWaitMinutes} minutes`);
+    console.log(chalk.yellow('Attempting to cancel the request...'));
+
+    try {
+      await this.provider.cancel(requestId);
+      console.log(chalk.yellow('Request cancelled due to timeout'));
+    } catch (error) {
+      console.log(chalk.yellow(`Warning: Could not cancel request: ${error.message}`));
+    }
+
     throw new Error(`Oracle request timeout after ${maxWaitMinutes} minutes`);
   }
 
@@ -353,14 +387,25 @@ async function main() {
   if (args.length === 0 || args[0] === '--help') {
     console.log(chalk.bold('\nAsk the Oracle - Consult premium AI models for deep code analysis\n'));
     console.log('Usage:');
-    console.log('  node oracle.js <patterns> -- <question>');
+    console.log('  node oracle.js [--yes] <patterns> -- <question>');
+    console.log('\nOptions:');
+    console.log('  --yes    Skip cost confirmation prompt (use for CI/automation)');
     console.log('\nExample:');
     console.log('  node oracle.js "src/**/*.js" "docs/**/*.md" -- "How can I improve this codebase?"\n');
     return;
   }
 
+  // Parse flags
+  let skipConfirmation = false;
+  let remainingArgs = args;
+
+  if (args[0] === '--yes') {
+    skipConfirmation = true;
+    remainingArgs = args.slice(1);
+  }
+
   // Parse arguments (patterns before --, question after --)
-  const separatorIndex = args.indexOf('--');
+  const separatorIndex = remainingArgs.indexOf('--');
 
   if (separatorIndex === -1) {
     console.error(chalk.red('Error: Please separate patterns and question with --'));
@@ -368,8 +413,8 @@ async function main() {
     process.exit(1);
   }
 
-  const patterns = args.slice(0, separatorIndex);
-  const question = args.slice(separatorIndex + 1).join(' ');
+  const patterns = remainingArgs.slice(0, separatorIndex);
+  const question = remainingArgs.slice(separatorIndex + 1).join(' ');
 
   if (patterns.length === 0) {
     console.error(chalk.red('Error: No file patterns specified'));
@@ -383,8 +428,29 @@ async function main() {
 
   try {
     const oracle = await new Oracle().init();
-    const response = await oracle.ask({ patterns, question, skipConfirmation: true });
+
+    // Set up SIGINT handler to cancel requests on Ctrl-C
+    const sigintHandler = async () => {
+      if (oracle.activeRequestId) {
+        console.log(chalk.yellow('\n\n⚠️  Ctrl-C detected. Cancelling Oracle request...'));
+        try {
+          await oracle.provider.cancel(oracle.activeRequestId);
+          console.log(chalk.green('✓ Request cancelled successfully'));
+        } catch (error) {
+          console.log(chalk.yellow(`Warning: Could not cancel request: ${error.message}`));
+        }
+      }
+      console.log(chalk.yellow('\nExiting...\n'));
+      process.exit(130); // Standard exit code for SIGINT
+    };
+
+    process.on('SIGINT', sigintHandler);
+
+    const response = await oracle.ask({ patterns, question, skipConfirmation });
     oracle.presentResponse(response);
+
+    // Remove SIGINT handler after successful completion
+    process.removeListener('SIGINT', sigintHandler);
   } catch (error) {
     console.error(chalk.red(`\n❌ Error: ${error.message}`));
     process.exit(1);

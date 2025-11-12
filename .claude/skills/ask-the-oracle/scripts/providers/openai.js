@@ -58,6 +58,8 @@ export class OpenAIProvider extends BaseProvider {
 
   async submit(context, question, options = {}) {
     try {
+      const combined = `${context}\n\n${question}`;
+
       const response = await this.client.responses.create({
         model: this.model,
         background: true, // Enable long-running mode
@@ -66,7 +68,12 @@ export class OpenAIProvider extends BaseProvider {
           {
             type: 'message',
             role: 'user',
-            content: `${context}\n\n${question}`
+            content: [
+              {
+                type: 'input_text',
+                text: combined
+              }
+            ]
           }
         ]
       });
