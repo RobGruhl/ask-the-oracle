@@ -65,8 +65,9 @@ export class OpenAIProvider extends BaseProvider {
         max_output_tokens: options.maxOutputTokens ?? 16000,
         input: [
           {
-            type: 'input_text',
-            text: `${context}\n\n${question}`
+            type: 'message',
+            role: 'user',
+            content: `${context}\n\n${question}`
           }
         ]
       });
