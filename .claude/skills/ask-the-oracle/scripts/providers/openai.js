@@ -135,12 +135,22 @@ export class OpenAIProvider extends BaseProvider {
 
     const cost = this.calculateCost(usage);
 
-    // Extract output text
+    // Extract output text from various possible structures
     let output = '';
     if (rawResponse.output && Array.isArray(rawResponse.output)) {
-      // Find text output
-      const textOutput = rawResponse.output.find(item => item.type === 'text');
-      output = textOutput?.text || '';
+      // Look for message type with content array
+      const message = rawResponse.output.find(item => item.type === 'message');
+      if (message?.content && Array.isArray(message.content)) {
+        // Find output_text or text items in content
+        const textItems = message.content.filter(item =>
+          item.type === 'output_text' || item.type === 'text'
+        );
+        output = textItems.map(item => item.text).join('\n');
+      } else {
+        // Fallback: look for direct text item
+        const textOutput = rawResponse.output.find(item => item.type === 'text');
+        output = textOutput?.text || '';
+      }
     } else if (rawResponse.output?.text) {
       output = rawResponse.output.text;
     }
