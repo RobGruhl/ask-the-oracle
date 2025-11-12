@@ -10,11 +10,13 @@
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
+import { createInterface } from 'readline';
 import chalk from 'chalk';
 import ora from 'ora';
 import { registry } from './providers/registry.js';
 import { RepomixWrapper } from './repomix-wrapper.js';
 import { CostCalculator } from './cost-calculator.js';
+import { ConfigValidator } from './config-validator.js';
 
 class Oracle {
   constructor(configPath = '.oraclerc') {
@@ -28,6 +30,18 @@ class Oracle {
    */
   async init() {
     this.config = await this.loadConfig();
+
+    // Validate configuration
+    ConfigValidator.validate(this.config);
+
+    // Show warnings
+    const warnings = ConfigValidator.getWarnings(this.config);
+    if (warnings.length > 0) {
+      console.log(chalk.yellow('\n⚠️  Configuration warnings:'));
+      warnings.forEach(warning => console.log(chalk.yellow(`  - ${warning}`)));
+      console.log();
+    }
+
     this.provider = registry.getDefault(this.config);
 
     if (!this.provider) {
@@ -115,11 +129,13 @@ class Oracle {
       console.log(chalk.yellow.bold(`\n⚠️  ${limitCheck.message}`));
     }
 
-    // Confirmation (can be skipped for automation)
+    // Confirmation (required unless explicitly skipped)
     if (!skipConfirmation) {
-      // For MVP, we'll skip interactive confirmation
-      // In full version, use inquirer here
-      console.log(chalk.gray('\n(Skipping confirmation for MVP)\n'));
+      const confirmed = await this.confirmSubmission(estimate.estimatedCost);
+      if (!confirmed) {
+        console.log(chalk.yellow('\n❌ Consultation cancelled by user\n'));
+        process.exit(0);
+      }
     }
 
     // Phase 3: Submit to Oracle
@@ -138,6 +154,13 @@ class Oracle {
       );
 
       console.log(chalk.green(`✓ Submitted (Request ID: ${response.id})`));
+
+      // Save request metadata immediately (for resume capability)
+      await this.saveToHistory(response, {
+        question,
+        patterns,
+        packedMetadata: packedResult.metadata
+      }, true); // partial save
     } catch (error) {
       console.log(chalk.red(`✗ Submission failed: ${error.message}`));
       throw error;
@@ -146,7 +169,7 @@ class Oracle {
     // Phase 4: Poll for completion
     response = await this.pollForCompletion(response.id, startTime);
 
-    // Phase 5: Save to history
+    // Phase 5: Update history with final response
     await this.saveToHistory(response, {
       question,
       patterns,
@@ -154,6 +177,28 @@ class Oracle {
     });
 
     return response;
+  }
+
+  /**
+   * Confirm submission with user
+   * @param {number} estimatedCost - Estimated cost in USD
+   * @returns {Promise<boolean>} User confirmed
+   */
+  async confirmSubmission(estimatedCost) {
+    return new Promise((resolve) => {
+      const rl = createInterface({
+        input: process.stdin,
+        output: process.stdout
+      });
+
+      rl.question(
+        chalk.cyan.bold(`\n💰 Proceed with consultation (est. $${estimatedCost.toFixed(2)})? (y/N): `),
+        (answer) => {
+          rl.close();
+          resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes');
+        }
+      );
+    });
   }
 
   /**
@@ -172,13 +217,26 @@ class Oracle {
     const spinner = ora('Polling for response...').start();
     let lastUpdateTime = Date.now();
 
+    let backoffMs = 0;
+    let retryCount = 0;
+
     while (Date.now() - startTime < maxWaitMs) {
-      await new Promise(resolve => setTimeout(resolve, pollInterval));
+      await new Promise(resolve => setTimeout(resolve, pollInterval + backoffMs));
 
       let response;
       try {
         response = await this.provider.poll(requestId);
+        // Reset backoff on successful poll
+        backoffMs = 0;
+        retryCount = 0;
       } catch (error) {
+        // Handle rate limits and transient errors with exponential backoff
+        if (error.status === 429 || (error.status >= 500 && error.status < 600)) {
+          retryCount++;
+          backoffMs = Math.min(30000, 1000 * Math.pow(2, retryCount)); // Max 30s backoff
+          spinner.text = `Rate limited, backing off ${(backoffMs / 1000).toFixed(0)}s...`;
+          continue;
+        }
         spinner.fail(`Polling error: ${error.message}`);
         throw error;
       }
@@ -215,8 +273,9 @@ class Oracle {
    * Save Oracle consultation to history
    * @param {Object} response - Oracle response
    * @param {Object} metadata - Additional metadata
+   * @param {boolean} partial - Whether this is a partial save (in-progress)
    */
-  async saveToHistory(response, metadata) {
+  async saveToHistory(response, metadata, partial = false) {
     if (!this.config.ui?.saveHistory) {
       return;
     }
@@ -234,23 +293,23 @@ class Oracle {
       return;
     }
 
-    // Create history entry
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const historyFile = join(historyDir, `oracle-${timestamp}.json`);
+    // Use request ID for consistent filename (enables updating)
+    const historyFile = join(historyDir, `oracle-${response.id}.json`);
 
     const historyEntry = {
       timestamp: new Date().toISOString(),
       question: metadata.question,
       patterns: metadata.patterns,
       packedFiles: metadata.packedMetadata.fileCount,
-      inputTokens: response.usage.inputTokens,
-      provider: response.metadata.provider,
-      model: response.metadata.model,
-      cost: response.cost,
-      elapsed: response.metadata.elapsed,
+      inputTokens: response.usage?.inputTokens || 0,
+      provider: response.metadata?.provider || 'unknown',
+      model: response.metadata?.model || 'unknown',
+      cost: response.cost || 0,
+      elapsed: response.metadata?.elapsed || 0,
       requestId: response.id,
-      response: response.output,
-      usage: response.usage
+      status: partial ? response.status : 'completed',
+      response: response.output || '',
+      usage: response.usage || {}
     };
 
     try {
