@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Skill(ask-the-oracle)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
