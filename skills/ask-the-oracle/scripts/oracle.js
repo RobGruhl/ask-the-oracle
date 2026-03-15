@@ -26,6 +26,7 @@ function parseArgs(argv) {
   const positional = [];
   let artifact = null;
   let contextHash = null;
+  let continueFrom = null;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -36,6 +37,7 @@ function parseArgs(argv) {
     else if (arg === '--cancel-on-timeout') flags.cancelOnTimeout = true;
     else if (arg.startsWith('--artifact=')) artifact = arg.slice('--artifact='.length);
     else if (arg.startsWith('--context-hash=')) contextHash = arg.slice('--context-hash='.length);
+    else if (arg.startsWith('--continue=')) continueFrom = arg.slice('--continue='.length);
     else positional.push(arg);
   }
 
@@ -58,7 +60,7 @@ function parseArgs(argv) {
     patterns = positional;
   }
 
-  return { command, flags, patterns, question, requestId, artifact, contextHash };
+  return { command, flags, patterns, question, requestId, artifact, contextHash, continueFrom };
 }
 
 function jsonOut(command, data) {
@@ -106,12 +108,14 @@ function showHelp() {
   console.log('  --yes                      Skip cost confirmation prompt');
   console.log('  --artifact=<path>          Reuse packed artifact from estimate (submit only)');
   console.log('  --context-hash=<hash>      Validate cached artifact (submit only)');
+  console.log('  --continue=<requestId>     Continue conversation from a previous response');
   console.log('  --cancel-on-timeout        Cancel request on timeout instead of detaching (ask only)');
   console.log('  --help                     Show this help');
   console.log('  --version                  Show version');
   console.log('\nExamples:');
   console.log('  node oracle.js estimate "src/**/*.js"');
   console.log('  node oracle.js submit --yes "src/**/*.js" -- "Review this code"');
+  console.log('  node oracle.js submit --yes --continue=resp_abc123 -- "Follow up question"');
   console.log('  node oracle.js status resp_abc123');
   console.log('  node oracle.js retrieve resp_abc123');
   console.log('  node oracle.js ask --yes "src/**/*.js" -- "How can I improve this?"\n');
@@ -125,7 +129,7 @@ function showSensitiveWarning(files) {
 }
 
 async function main() {
-  const { command, flags, patterns, question, requestId, artifact, contextHash } = parseArgs(process.argv.slice(2));
+  const { command, flags, patterns, question, requestId, artifact, contextHash, continueFrom } = parseArgs(process.argv.slice(2));
 
   if (flags.version) {
     console.log(VERSION);
@@ -174,8 +178,8 @@ async function main() {
 
       // -- submit ----------------------------------------------------------
       case 'submit': {
-        // Estimate first for human confirmation
-        if (!flags.yes && !flags.json) {
+        // Skip estimate/confirm for continuations — no packing involved
+        if (!continueFrom && !flags.yes && !flags.json) {
           const spinner = ora('Packing code with Repomix...').start();
           const est = await oracle.estimate({ patterns });
           spinner.succeed(`Packed ${est.fileCount} files (${est.tokenCount.toLocaleString()} tokens)`);
@@ -198,9 +202,15 @@ async function main() {
           }
         }
 
-        if (!flags.json) console.log(chalk.bold(`\nSubmitting to ${oracle.provider.getDisplayName()}...`));
+        if (!flags.json) {
+          if (continueFrom) {
+            console.log(chalk.bold(`\nContinuing conversation from ${continueFrom.slice(0, 20)}...`));
+          } else {
+            console.log(chalk.bold(`\nSubmitting to ${oracle.provider.getDisplayName()}...`));
+          }
+        }
 
-        const result = await oracle.submit({ patterns, question, artifactPath: artifact, contextHash });
+        const result = await oracle.submit({ patterns, question, artifactPath: artifact, contextHash, continueFrom });
 
         if (flags.json) {
           jsonOut(command, result);

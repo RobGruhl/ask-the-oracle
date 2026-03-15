@@ -51,8 +51,8 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   getMaxOutputTokens() {
-    // GPT-5.4 Pro supports up to 16k output
-    return 16000;
+    // GPT-5.4 Pro supports up to 128k output
+    return 128000;
   }
 
   // ============================================================================
@@ -61,16 +61,12 @@ export class OpenAIProvider extends BaseProvider {
 
   async submit(context, question, options = {}) {
     try {
-      const combined = `${context}\n\n${question}`;
-
-      // background: true enables server-side queueing for long requests.
-      // Set useBackgroundMode: false in .oraclerc for synchronous mode (debugging only).
       const useBackground = this.config.useBackgroundMode !== false;
 
-      const response = await this.client.responses.create({
+      const requestBody = {
         model: this.model,
         ...(useBackground ? { background: true, store: true } : {}),
-        max_output_tokens: options.maxOutputTokens ?? 16000,
+        max_output_tokens: options.maxOutputTokens ?? 128000,
         input: [
           {
             type: 'message',
@@ -78,12 +74,19 @@ export class OpenAIProvider extends BaseProvider {
             content: [
               {
                 type: 'input_text',
-                text: combined
+                text: context ? `${context}\n\n${question}` : question
               }
             ]
           }
         ]
-      });
+      };
+
+      // Chain to a previous response for multi-turn conversations
+      if (options.previousResponseId) {
+        requestBody.previous_response_id = options.previousResponseId;
+      }
+
+      const response = await this.client.responses.create(requestBody);
 
       return this.normalizeResponse(response);
     } catch (error) {

@@ -67,7 +67,7 @@ class MockProvider {
   getModelName() { return 'mock-model'; }
   getPricing() { return this.pricing; }
   getMaxContextTokens() { return 200000; }
-  getMaxOutputTokens() { return 16000; }
+  getMaxOutputTokens() { return 128000; }
 
   calculateCost(usage) {
     const inputCost = (usage.inputTokens / 1_000_000) * this.pricing.input;
@@ -1163,7 +1163,7 @@ describe('Integration: OpenAI provider construction', () => {
     assert(provider.getModelName() === 'gpt-5.4-pro');
     assert(provider.getDisplayName() === 'OpenAI GPT-5.4-PRO');
     assert(provider.getMaxContextTokens() === 200000);
-    assert(provider.getMaxOutputTokens() === 16000);
+    assert(provider.getMaxOutputTokens() === 128000);
     assert(provider.supportsBackgroundMode() === true);
   });
 

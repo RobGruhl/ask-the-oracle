@@ -283,8 +283,14 @@ class Oracle {
    * @param {string} opts.question - Question to ask the oracle
    * @param {string} [opts.artifactPath] - Pre-packed artifact from estimate()
    * @param {string} [opts.contextHash] - Hash to validate cached artifact
+   * @param {string} [opts.continueFrom] - Previous request ID for multi-turn conversation
    */
-  async submit({ patterns, question, artifactPath, contextHash }) {
+  async submit({ patterns, question, artifactPath, contextHash, continueFrom }) {
+    // When continuing a conversation, skip packing — just send the question
+    if (continueFrom) {
+      return this._submitContinuation(continueFrom, question, patterns);
+    }
+
     if (!patterns || patterns.length === 0) {
       throw new OracleError('VALIDATION_ERROR', 'No file patterns specified');
     }
@@ -409,6 +415,75 @@ class Oracle {
   }
 
   /**
+   * Continue a conversation by chaining to a previous response.
+   * Optionally packs new files if patterns are provided (hybrid mode).
+   */
+  async _submitContinuation(continueFrom, question, patterns = []) {
+    if (!question) {
+      throw new OracleError('VALIDATION_ERROR', 'No question specified for continuation');
+    }
+
+    // Resolve the provider that handled the original request
+    const provider = await this._resolveProvider(continueFrom);
+    const parentManifest = await this.loadManifest(continueFrom);
+
+    // If patterns provided, pack fresh files to include alongside the continuation
+    let context = '';
+    let packedMetadata = { fileCount: 0, tokenCount: 0, files: [] };
+    if (patterns.length > 0) {
+      const repomix = new RepomixWrapper(this.config.repomix);
+      const packed = await repomix.packAndRead(patterns);
+      context = packed.context;
+      packedMetadata = packed.metadata;
+    }
+
+    let response;
+    try {
+      response = await provider.submit(
+        context, question,
+        {
+          previousResponseId: continueFrom,
+          temperature: this.config.providers[provider.getName()]?.temperature,
+        }
+      );
+    } catch (err) {
+      throw new OracleError('PROVIDER_ERROR', err.message);
+    }
+
+    // Use provided patterns, or inherit from parent
+    const effectivePatterns = patterns.length > 0 ? patterns : (parentManifest?.patterns || []);
+
+    const historyFile = await this.saveToHistory(response, {
+      question, patterns: effectivePatterns,
+      packedMetadata
+    }, true);
+
+    await this.saveManifest(response.id, {
+      providerName: provider.getName(),
+      model: provider.getModelName(),
+      question,
+      patterns: effectivePatterns,
+      submittedAt: new Date().toISOString(),
+      continueFrom,
+    });
+
+    return {
+      requestId: response.id,
+      historyFile,
+      continueFrom,
+      estimate: null,
+      limitCheck: { withinLimit: true, exceeded: false, warning: false, message: '' },
+      sensitiveFiles: [],
+      packed: { fileCount: packedMetadata.fileCount || 0, tokenCount: packedMetadata.tokenCount || 0 },
+      provider: {
+        name: provider.getName(),
+        displayName: provider.getDisplayName(),
+        model: provider.getModelName()
+      }
+    };
+  }
+
+  /**
    * Resolve provider for a request — uses manifest if available, falls back to default.
    */
   async _resolveProvider(requestId) {
@@ -437,7 +512,7 @@ class Oracle {
   }
 
   /**
-   * Retrieve a response (same as status, but updates history if completed)
+   * Retrieve a response (same as status, but updates history if has output)
    */
   async retrieve(requestId) {
     if (!requestId) {
@@ -453,12 +528,16 @@ class Oracle {
       throw new OracleError('PROVIDER_ERROR', err.message);
     }
 
-    if (response.status === 'completed') {
+    // Save history for any response that has output (completed or incomplete/truncated)
+    if (response.output) {
+      // Pull question/patterns from manifest so markdown gets a real title
+      const manifest = await this.loadManifest(requestId);
       await this.saveToHistory(response, {
-        question: '', patterns: [],
+        question: manifest?.question || '',
+        patterns: manifest?.patterns || [],
         packedMetadata: { fileCount: 0, tokenCount: 0 }
       });
-      await this.updateManifestStatus(requestId, 'completed');
+      await this.updateManifestStatus(requestId, response.status);
     }
 
     return response;
@@ -589,20 +668,28 @@ class Oracle {
 
     const historyFile = join(historyDir, `oracle-${response.id}.json`);
 
+    // Merge with existing entry to preserve question/patterns from submit
+    let existing = {};
+    try {
+      existing = JSON.parse(await readFile(historyFile, 'utf8'));
+    } catch {
+      // No existing file — start fresh
+    }
+
     const entry = {
-      timestamp: new Date().toISOString(),
-      question: metadata.question,
-      patterns: metadata.patterns,
-      packedFiles: metadata.packedMetadata.fileCount,
-      inputTokens: response.usage?.inputTokens || 0,
-      provider: response.metadata?.provider || 'unknown',
-      model: response.metadata?.model || 'unknown',
-      cost: response.cost || 0,
-      elapsed: response.metadata?.elapsed || 0,
+      timestamp: existing.timestamp || new Date().toISOString(),
+      question: metadata.question || existing.question || '',
+      patterns: metadata.patterns?.length ? metadata.patterns : (existing.patterns || []),
+      packedFiles: metadata.packedMetadata.fileCount || existing.packedFiles || 0,
+      inputTokens: response.usage?.inputTokens || existing.inputTokens || 0,
+      provider: response.metadata?.provider || existing.provider || 'unknown',
+      model: response.metadata?.model || existing.model || 'unknown',
+      cost: response.cost || existing.cost || 0,
+      elapsed: response.metadata?.elapsed || existing.elapsed || 0,
       requestId: response.id,
-      status: partial ? response.status : 'completed',
-      response: response.output || '',
-      usage: response.usage || {}
+      status: partial ? (response.status || 'queued') : (response.status || 'completed'),
+      response: response.output || existing.response || '',
+      usage: response.usage?.totalTokens ? response.usage : (existing.usage || {})
     };
 
     try {
@@ -611,7 +698,108 @@ class Oracle {
       return null;
     }
 
+    // Generate readable markdown alongside JSON when we have a response
+    if (entry.response) {
+      try {
+        await this._writeHistoryMarkdown(historyDir, entry);
+      } catch {
+        // Non-fatal — JSON is the primary artifact
+      }
+    }
+
     return historyFile;
+  }
+
+  /**
+   * Write a readable markdown file alongside the JSON history entry.
+   */
+  async _writeHistoryMarkdown(historyDir, entry) {
+    const ts = new Date(entry.timestamp);
+    const dateStr = ts.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const timeStr = ts.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+    // Build a date-prefixed slug from the question
+    const datePrefix = ts.toISOString().slice(0, 10); // YYYY-MM-DD
+    const questionSlug = this._slugify(entry.question) || entry.requestId;
+    const slug = `${datePrefix}-${questionSlug}`;
+
+    // Build file manifest from patterns
+    const home = process.env.HOME || '';
+    const cwd = process.cwd();
+    const shortenPath = (p) => {
+      if (p.startsWith(cwd + '/')) return p.slice(cwd.length + 1);
+      if (home && p.startsWith(home + '/')) return '~/' + p.slice(home.length + 1);
+      return p;
+    };
+
+    const lines = [
+      `# Oracle: ${this._titleize(questionSlug)}`,
+      '',
+      `**Date:** ${dateStr} at ${timeStr}  `,
+      `**Request ID:** \`${entry.requestId}\`  `,
+      `**Model:** ${entry.model}  `,
+      `**Status:** ${entry.status}  `,
+      `**Cost:** $${(entry.cost || 0).toFixed(2)}  `,
+      `**Tokens:** ${(entry.usage?.inputTokens || 0).toLocaleString()} input, ` +
+        `${(entry.usage?.outputTokens || 0).toLocaleString()} output, ` +
+        `${(entry.usage?.reasoningTokens || 0).toLocaleString()} reasoning`,
+      '',
+    ];
+
+    // File manifest
+    const patterns = entry.patterns || [];
+    if (patterns.length > 0) {
+      lines.push(`**Files sent** (${patterns.length}):`, '');
+      for (const p of patterns) {
+        lines.push(`- \`${shortenPath(p)}\``);
+      }
+      lines.push('');
+    }
+
+    lines.push(
+      '---',
+      '',
+      '## Question',
+      '',
+      entry.question || '(not recorded)',
+      '',
+      '---',
+      '',
+      '## Response',
+      '',
+      entry.response || '(empty)',
+    );
+
+    const mdPath = join(historyDir, `${slug}.md`);
+    await writeFile(mdPath, lines.join('\n'));
+  }
+
+  /**
+   * Turn a question string into a filesystem-safe slug.
+   */
+  _slugify(text) {
+    if (!text) return '';
+    // Strip common preamble noise, then take first meaningful fragment
+    const cleaned = text
+      .replace(/^(FOLLOW-UP REQUEST|CONTINUATION REQUEST)\s*[-—]\s*/i, '')
+      .replace(/^this is a\s+/i, '');
+    // Take first line or first 60 chars, then break at last whole word
+    let fragment = cleaned.split('\n')[0].slice(0, 60);
+    const lastSpace = fragment.lastIndexOf(' ');
+    if (lastSpace > 20) fragment = fragment.slice(0, lastSpace);
+    return fragment
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  /**
+   * Turn a slug back into a readable title.
+   */
+  _titleize(slug) {
+    return slug
+      .replace(/-/g, ' ')
+      .replace(/\b\w/g, c => c.toUpperCase());
   }
 
   // ============================================================================
