@@ -1,214 +1,133 @@
 ---
 name: ask-the-oracle
-description: Submit complex code questions to OpenAI GPT-5 Pro for deep analysis when you have 20 minutes. Use when the user asks for architectural analysis, comprehensive code review, debugging complex issues, or requests expert analysis of their codebase that requires extended reasoning. Automatically handles file selection, code packing with Repomix, cost estimation, long-running API requests, and result presentation.
-allowed-tools: Read, Write, Grep, Glob, Bash, AskUserQuestion
+description: Consult GPT-5.4 Pro for deep code analysis that takes 10-20 minutes of extended reasoning. Use this skill whenever the user asks for architecture review, security audit, debugging complex issues, comprehensive code review, performance analysis, or expert-level analysis across multiple files. Also use when the user says "ask the oracle", "deep dive", "deep analysis", "expert analysis", "consult the oracle", or wants a second opinion from another model. Do NOT use for simple questions you can answer directly.
+allowed-tools: Read, Grep, Glob, Bash, AskUserQuestion
 ---
 
 # Ask the Oracle
 
-Inspired by Andrej Karpathy's approach of consulting GPT-5 Pro as an "Oracle" for complex code questions that require 20+ minutes of deep reasoning.
+Consult GPT-5.4 Pro as an "Oracle" for complex code questions requiring 10-20 minutes of deep reasoning.
 
-## When to Use This Skill
+## JSON API
 
-Use this skill when the user:
-- Asks for **architectural analysis or design review**
-- Needs **debugging help for complex, non-obvious issues**
-- Requests **comprehensive code review** across multiple files
-- Wants **expert analysis** beyond my immediate capabilities
-- Says things like "deep dive", "expert analysis", "comprehensive review", "consult the Oracle"
-- Is willing to wait 10-20 minutes for high-quality results
-- Has a question that requires reasoning across large amounts of code
+All `--json` output uses a versioned envelope:
 
-## When NOT to Use This Skill
+```json
+// Success
+{ "schemaVersion": 1, "ok": true, "command": "estimate", "data": { ... } }
 
-Skip this skill when:
-- The question is simple and I can answer it directly
-- The user needs an immediate response
-- The task is about editing or generating code (not analysis)
-- The question is conversational or doesn't require codebase context
+// Error
+{ "schemaVersion": 1, "ok": false, "command": "submit", "error": { "code": "COST_LIMIT_EXCEEDED", "message": "...", "details": {} } }
+```
+
+Always check `ok` first. On success, read `data`. On failure, read `error.code` and `error.message`.
 
 ## Instructions
 
-### Phase 1: Understand the Question
+### Phase 1: Understand and Select Files
 
-1. **Capture the user's question**
-   - What specifically do they want to know?
-   - What problem are they trying to solve?
+1. Capture the user's question -- what do they want to know, what problem are they solving?
+2. Use Glob to identify relevant files matching the question scope
+3. Ask user to confirm file selection using AskUserQuestion -- present count, let them refine
 
-2. **Determine scope**
-   - Which files/directories are relevant?
-   - Is this about architecture, bugs, performance, security, or best practices?
+### Phase 2: Estimate Cost
 
-### Phase 2: Select Files
+Run the estimate command to get structured data:
 
-1. **Use Glob to identify relevant files**
-   - Search for patterns matching the question scope
-   - Examples:
-     - `**/*.{js,ts}` for JavaScript/TypeScript projects
-     - `src/**/*.py` for Python source code
-     - `**/*.{go,mod}` for Go projects
+```bash
+cd <project-root> && node ${CLAUDE_SKILL_DIR}/scripts/oracle.js estimate --json <patterns>
+```
 
-2. **Ask user to confirm or refine file selection** using AskUserQuestion
-   - Present the file count and pattern
-   - Allow them to add/remove patterns
-   - Example: "I found 45 JavaScript files in src/. Should I include tests/ as well?"
+Parse the JSON envelope. On success, read from `data`:
+- `data.fileCount`, `data.tokenCount` -- scope metrics
+- `data.estimate` -- cost breakdown
+- `data.limitCheck` -- whether cost is within limits
+- `data.sensitiveFiles` -- files that will be sent to a third party
+- `data.tokenCheck` -- token limit check: `withinLimit`, `headroom`, `message`
+- `data.artifactPath` -- path to pre-packed artifact (pass to submit to avoid double-packing)
+- `data.sidecarPath` -- path to artifact sidecar manifest (metadata for fast reuse)
+- `data.contextHash` -- hash to validate the cached artifact
 
-3. **Show estimated token count**
-   - Use Bash to run: `cd <project-root> && node .claude/skills/ask-the-oracle/scripts/oracle.js <patterns> -- "test" 2>&1 | grep "tokens"`
-   - This will show the token estimate from Repomix
+If `data.sensitiveFiles` is non-empty, warn the user that those files will be sent to a third party.
 
-### Phase 3: Formulate the Question
+### Phase 3: Confirm with User
 
-1. **Ask clarifying questions** using AskUserQuestion if needed:
-   - "What specific aspect are you investigating?" (architecture/bugs/performance/etc.)
-   - "What is the expected behavior or outcome?"
-   - "Have you tried any debugging steps already?"
+1. GPT-5.4 Pro pricing: $30/M input, $180/M output. Typical cost: $2-10.
+2. If cost > $5 warn the user. If cost > configured limit, don't proceed without approval.
+3. Confirm with user: show estimated cost, remind them it takes ~10-20 minutes.
 
-2. **Format the question clearly**
-   - Start with context: "This is a [type] project with [key characteristics]"
-   - State the specific question
-   - Add any constraints or focus areas
-   - Example:
-     ```
-     This is a Node.js Express API with TypeScript. The codebase handles user authentication
-     and data processing. I'm experiencing memory leaks that occur after several hours of
-     operation, particularly related to request handlers. Please analyze the code and:
-     1. Identify potential memory leak sources
-     2. Explain why the async refactor may have triggered this
-     3. Suggest specific fixes with code examples
-     ```
+### Phase 4: Submit
 
-### Phase 4: Estimate Cost and Confirm
+Submit the question, reusing the packed artifact from estimate:
 
-1. **Calculate estimated cost**
-   - Repomix will show token count when packing
-   - GPT-5 Pro pricing: $15/M input, $120/M output
-   - Typical costs: $2-10 depending on codebase size
+```bash
+cd <project-root> && node ${CLAUDE_SKILL_DIR}/scripts/oracle.js submit --yes --json \
+  --artifact=<artifactPath> --context-hash=<contextHash> \
+  <patterns> -- "<question>"
+```
 
-2. **Check against limits** (from .oraclerc)
-   - If cost > $5, inform user and ask for confirmation
-   - If cost > configured limit, don't proceed without explicit approval
+The `--artifact` and `--context-hash` flags reuse the packed context from estimate, avoiding a second Repomix pass.
+The `--yes` flag skips the cost prompt (you already confirmed with the user).
 
-3. **Confirm with user** using AskUserQuestion:
-   - Show estimated cost
-   - Confirm they want to proceed
-   - Remind them it may take 20 minutes
+Parse the envelope. On success, read `data.requestId`.
 
-### Phase 5: Submit to Oracle
+Tell the user immediately:
+> "Oracle consultation submitted to GPT-5.4 Pro (Request ID: <id>). This takes 10-20 minutes. Ask me 'Check on the Oracle' anytime for status."
 
-1. **Run the oracle script** using Bash:
-   ```bash
-   cd <project-root> && node .claude/skills/ask-the-oracle/scripts/oracle.js <patterns> -- "<question>"
-   ```
+### Phase 5: Check Status
 
-   Example:
-   ```bash
-   cd /Users/robgruhl/Projects/my-app && \
-   node .claude/skills/ask-the-oracle/scripts/oracle.js \
-   "src/**/*.ts" "lib/**/*.ts" -- \
-   "Analyze this codebase for memory leaks. Focus on async handlers and event listeners."
-   ```
+When the user checks progress:
 
-2. **The script will**:
-   - Pack code with Repomix
-   - Show cost estimate
-   - Submit to GPT-5 Pro (background mode)
-   - Poll every 3 seconds for completion
-   - Display progress updates
-   - Save response to history
+```bash
+cd <project-root> && node ${CLAUDE_SKILL_DIR}/scripts/oracle.js status --json <requestId>
+```
 
-3. **Monitor the output**
-   - The script will show status updates
-   - Wait for completion (don't timeout Claude Code!)
-   - Typical time: 10-20 minutes
+Report `data.status`: `queued`, `in_progress`, `completed`, or `failed`.
 
-### Phase 6: Present Results
+### Phase 6: Retrieve and Present Results
 
-1. **The oracle script will display**:
-   - Provider and model used
-   - Time elapsed
-   - Cost breakdown (input/reasoning/output tokens)
-   - Full response from GPT-5 Pro
+When status is `completed`:
 
-2. **Read the history file** using Read tool:
-   - Location: `.claude/oracle-history/oracle-<timestamp>.json`
-   - Contains full response and metadata
+```bash
+cd <project-root> && node ${CLAUDE_SKILL_DIR}/scripts/oracle.js retrieve --json <requestId>
+```
 
-3. **Present to user**:
-   - Summarize key findings
-   - Highlight actionable recommendations
-   - Show cost and time metrics
-   - Ask if they have follow-up questions
+Read `data.output`, `data.usage`, and `data.cost`.
+
+Summarize key findings, highlight actionable recommendations, show cost/time, ask about follow-ups.
 
 ### Error Handling
 
-**If .oraclerc not found:**
-- Inform user they need to set up configuration
-- Point them to .oraclerc.example
-- Explain they need an OpenAI API key
+All errors return an envelope with `ok: false`. Check `error.code`:
 
-**If API key invalid:**
-- Check if OPENAI_API_KEY environment variable is set
-- Suggest checking their API key configuration
-- Remind them they need GPT-5 Pro access
+| Code | Exit | Meaning |
+|------|------|---------|
+| CONFIG_NOT_FOUND | 2 | `.oraclerc` missing -- tell user to `cp .oraclerc.example .oraclerc` |
+| CONFIG_INVALID | 2 | Config validation failed |
+| CONFIG_PARSE_ERROR | 2 | JSON parse error in `.oraclerc` |
+| NO_PROVIDER | 2 | No providers configured |
+| VALIDATION_ERROR | 3 | Missing patterns/question, no files matched |
+| COST_LIMIT_EXCEEDED | 3 | Cost exceeds configured limit -- suggest reducing file scope |
+| CONTEXT_TOO_LARGE | 3 | Input tokens exceed provider's context window -- reduce file scope |
+| PROVIDER_ERROR | 4 | API error from provider -- check API key, connectivity |
+| TIMEOUT | 5 | Polling exceeded maxWaitMinutes (only with `--cancel-on-timeout`) |
+| REMOTE_FAILED | 6 | Provider returned failed |
+| REMOTE_CANCELLED | 6 | Provider returned cancelled |
 
-**If cost limit exceeded:**
-- Show the estimated cost
-- Ask if they want to proceed anyway
-- Suggest ways to reduce cost (fewer files, compression)
-
-**If timeout:**
-- The script has a 25-minute timeout
-- If it times out, the request might still be processing
-- Response ID is saved, can be retrieved later
-
-**If request fails:**
-- Show the error message from OpenAI
-- Suggest checking API status
-- Offer to retry
+To cancel: `node ${CLAUDE_SKILL_DIR}/scripts/oracle.js cancel <requestId>`
 
 ## Important Notes
 
-- **Cost**: Typically $2-10 per request depending on codebase size
-- **Time**: Expect 10-20 minutes for responses (GPT-5 Pro uses extended reasoning)
-- **API Access**: Requires OpenAI API key with GPT-5 Pro access
-- **Privacy**: Code is sent to OpenAI (retained for 30 days per their policy)
-- **History**: All consultations are saved to `.claude/oracle-history/`
-- **Limits**: Configurable cost limits in .oraclerc prevent accidental overspending
-
-## Example Usage
-
-### Example 1: Memory Leak Analysis
-
-**User**: "I have a memory leak in my Node.js service. Can you do a deep analysis?"
-
-**Claude Code**:
-1. Uses Glob to find: `**/*.js`, `src/**/*.ts`
-2. Asks: "I found 42 files. Should I include tests?"
-3. Asks: "What symptoms are you seeing?" → "Gradual memory growth, crashes at 2GB"
-4. Asks: "When did this start?" → "After async refactor"
-5. Shows estimate: ~$3.20 (45K tokens input)
-6. Confirms: "Proceed?"
-7. Runs oracle script
-8. Waits 18 minutes
-9. Presents detailed analysis with fixes
-
-### Example 2: Architecture Review
-
-**User**: "Review the architecture of my API"
-
-**Claude Code**:
-1. Uses Glob: `src/api/**/*.ts`, `src/models/**/*.ts`
-2. Estimates: 80K tokens (~$5.40)
-3. Asks confirmation (exceeds $5 threshold)
-4. User confirms
-5. Runs oracle script
-6. Waits 22 minutes
-7. Presents architecture analysis with recommendations
+- **Cost**: Typically $0.05-$2 per request depending on codebase size and response length
+- **Time**: 10-20 minutes (GPT-5.4 Pro extended reasoning)
+- **Privacy**: Code is sent to OpenAI (retained per their policy)
+- **Security assumptions**: Designed for a single-user machine. Artifacts and history are stored as plaintext. See CLAUDE.md "Security Assumptions" for details.
+- **History**: Saved to `.claude/oracle-history/`
+- **Config**: `.oraclerc` in project root (see `.oraclerc.example`). Supports `//` and `#` comments.
 
 ## Configuration
 
-Users must have `.oraclerc` in project root:
+Users need `.oraclerc` in their project root:
 
 ```json
 {
@@ -216,7 +135,7 @@ Users must have `.oraclerc` in project root:
   "providers": {
     "openai": {
       "apiKey": "$OPENAI_API_KEY",
-      "model": "gpt-5-pro",
+      "model": "gpt-5.4-pro",
       "enabled": true
     }
   },
@@ -227,14 +146,3 @@ Users must have `.oraclerc` in project root:
 }
 ```
 
-## Tips for Best Results
-
-1. **Be specific** in questions - the Oracle works best with clear, focused questions
-2. **Select relevant files only** - more code = higher cost and longer processing
-3. **Provide context** - explain what you've tried and what you're looking for
-4. **Use for complex issues** - save simple questions for me directly
-5. **Follow up** - you can ask clarifying questions after getting the response
-
----
-
-**Remember**: This skill makes external API calls that cost money and take time. Always confirm with the user before submitting, and set clear expectations about the 20-minute wait time.

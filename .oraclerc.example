@@ -1,35 +1,25 @@
-# Ask the Oracle Configuration
-# Copy this file to .oraclerc and customize
-
 {
   "defaultProvider": "openai",
 
   "providers": {
     "openai": {
-      # Option 1: Use environment variable (recommended if OPENAI_API_KEY is set)
-      # Leave apiKey empty or set to "$OPENAI_API_KEY" to use from environment
       "apiKey": "$OPENAI_API_KEY",
-
-      # Option 2: Explicit API key (alternative)
-      # "apiKey": "sk-...",
-
-      "model": "gpt-5-pro",
-      "maxWaitMinutes": 25,
+      "model": "gpt-5.4-pro",
+      "maxWaitMinutes": 120,
       "temperature": 0.2,
       "enabled": true
-    }
 
-    # Future providers (V2.0+)
-    # "google": {
-    #   "apiKey": "$GOOGLE_API_KEY",
-    #   "model": "gemini-2.0-pro",
-    #   "enabled": true
-    # },
-    # "anthropic": {
-    #   "apiKey": "$ANTHROPIC_API_KEY",
-    #   "model": "claude-opus-4",
-    #   "enabled": true
-    # }
+      // Background mode (default: true, recommended)
+      // When true, requests are queued server-side and polled for completion.
+      // When false, the HTTP request blocks until the response is ready.
+      // Sync mode can timeout for complex questions that trigger extended
+      // reasoning (10+ minutes). Only disable for debugging.
+      // "useBackgroundMode": true,
+
+      // SDK timeout (only relevant when useBackgroundMode is false)
+      // How long the HTTP client waits for a synchronous response.
+      // "sdkTimeoutMinutes": 30,
+    }
   },
 
   "repomix": {
@@ -41,10 +31,7 @@
 
   "limits": {
     "maxCostPerRequest": 10.00,
-    "maxCostPerProvider": 10.00,
-    "maxTotalCost": 25.00,
-    "warnCostThreshold": 5.00,
-    "maxInputTokens": 100000
+    "warnCostThreshold": 5.00
   },
 
   "ui": {
@@ -52,11 +39,4 @@
     "saveHistory": true,
     "historyPath": ".claude/oracle-history"
   }
-
-  # Multi-model settings (V2.0+)
-  # "multiModel": {
-  #   "enabled": true,
-  #   "parallelExecution": true,
-  #   "synthesisMode": "claude-analysis"
-  # }
 }

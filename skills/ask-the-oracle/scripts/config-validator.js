@@ -59,11 +59,9 @@ export class ConfigValidator {
 
       enabledProviders.push(name);
 
-      // Check required fields for enabled providers
       if (!providerConfig.apiKey) {
         errors.push(`Provider ${name}: missing apiKey`);
       }
-
       if (!providerConfig.model) {
         errors.push(`Provider ${name}: missing model`);
       }
@@ -81,6 +79,12 @@ export class ConfigValidator {
           errors.push(`Provider ${name}: temperature must be between 0 and 2`);
         }
       }
+
+      if (providerConfig.sdkTimeoutMinutes !== undefined) {
+        if (typeof providerConfig.sdkTimeoutMinutes !== 'number' || providerConfig.sdkTimeoutMinutes <= 0) {
+          errors.push(`Provider ${name}: sdkTimeoutMinutes must be a positive number`);
+        }
+      }
     }
 
     if (enabledProviders.length === 0) {
@@ -91,10 +95,7 @@ export class ConfigValidator {
   static validateLimits(limits, errors) {
     const numericFields = [
       'maxCostPerRequest',
-      'maxCostPerProvider',
-      'maxTotalCost',
-      'warnCostThreshold',
-      'maxInputTokens'
+      'warnCostThreshold'
     ];
 
     for (const field of numericFields) {
@@ -131,7 +132,10 @@ export class ConfigValidator {
 
     // Warn about missing API keys that use environment variables
     for (const [name, providerConfig] of Object.entries(config.providers || {})) {
-      if (providerConfig.enabled && providerConfig.apiKey?.startsWith('$')) {
+      if (!providerConfig.enabled) continue;
+
+      // Check environment variable API keys
+      if (providerConfig.apiKey?.startsWith('$')) {
         const envVar = providerConfig.apiKey.slice(1);
         if (!process.env[envVar]) {
           warnings.push(
@@ -139,6 +143,19 @@ export class ConfigValidator {
             `Set it in your shell or .env file.`
           );
         }
+      }
+    }
+
+    // Warn about sync mode (useBackgroundMode: false)
+    for (const [name, providerConfig] of Object.entries(config.providers || {})) {
+      if (!providerConfig.enabled) continue;
+
+      if (providerConfig.useBackgroundMode === false) {
+        warnings.push(
+          `Provider ${name}: useBackgroundMode is disabled. ` +
+          `Sync mode can timeout for complex questions that trigger extended reasoning. ` +
+          `Consider enabling background mode (remove useBackgroundMode or set to true).`
+        );
       }
     }
 

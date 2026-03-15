@@ -1,465 +1,493 @@
 #!/usr/bin/env node
 
 /**
- * Ask the Oracle - Main Orchestrator
+ * Ask the Oracle - CLI Entry Point
  *
- * Consults premium AI models for deep code analysis.
- * Inspired by Andrej Karpathy's approach of using GPT-5 Pro as an "Oracle".
+ * Presentation layer only: argument parsing, JSON envelopes, human output.
+ * Business logic lives in oracle-service.js.
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
-import { join, dirname } from 'path';
 import { createInterface } from 'readline';
 import chalk from 'chalk';
 import ora from 'ora';
-import { registry } from './providers/registry.js';
-import { RepomixWrapper } from './repomix-wrapper.js';
+import {
+  Oracle,
+  OracleError,
+  buildEnvelope,
+  buildErrorEnvelope,
+} from './oracle-service.js';
 import { CostCalculator } from './cost-calculator.js';
-import { ConfigValidator } from './config-validator.js';
 
-class Oracle {
-  constructor(configPath = '.oraclerc') {
-    this.configPath = configPath;
-    this.config = null;
-    this.provider = null;
-    this.activeRequestId = null;
+const VERSION = '1.4.0';
+const COMMANDS = ['estimate', 'submit', 'status', 'retrieve', 'cancel', 'ask', 'list', 'cleanup'];
+
+function parseArgs(argv) {
+  const flags = { json: false, yes: false, help: false, version: false, cancelOnTimeout: false };
+  const positional = [];
+  let artifact = null;
+  let contextHash = null;
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--json') flags.json = true;
+    else if (arg === '--yes') flags.yes = true;
+    else if (arg === '--help' || arg === '-h') flags.help = true;
+    else if (arg === '--version' || arg === '-v') flags.version = true;
+    else if (arg === '--cancel-on-timeout') flags.cancelOnTimeout = true;
+    else if (arg.startsWith('--artifact=')) artifact = arg.slice('--artifact='.length);
+    else if (arg.startsWith('--context-hash=')) contextHash = arg.slice('--context-hash='.length);
+    else positional.push(arg);
   }
 
-  /**
-   * Initialize Oracle by loading configuration
-   */
-  async init() {
-    this.config = await this.loadConfig();
-
-    // Validate configuration
-    ConfigValidator.validate(this.config);
-
-    // Show warnings
-    const warnings = ConfigValidator.getWarnings(this.config);
-    if (warnings.length > 0) {
-      console.log(chalk.yellow('\n⚠️  Configuration warnings:'));
-      warnings.forEach(warning => console.log(chalk.yellow(`  - ${warning}`)));
-      console.log();
-    }
-
-    this.provider = registry.getDefault(this.config);
-
-    if (!this.provider) {
-      throw new Error(
-        'No Oracle providers configured. Please set up .oraclerc with your API keys.\n' +
-        'See .oraclerc.example for template.'
-      );
-    }
-
-    return this;
+  let command = 'ask';
+  if (positional.length > 0 && COMMANDS.includes(positional[0])) {
+    command = positional.shift();
   }
 
-  /**
-   * Load configuration from .oraclerc
-   */
-  async loadConfig() {
-    const configPath = join(process.cwd(), this.configPath);
+  const sepIndex = positional.indexOf('--');
+  let patterns = [];
+  let question = '';
+  let requestId = null;
 
-    if (!existsSync(configPath)) {
-      throw new Error(
-        `.oraclerc not found. Please create ${configPath}\n` +
-        'See .oraclerc.example for template.'
-      );
-    }
-
-    try {
-      const content = await readFile(configPath, 'utf-8');
-      return JSON.parse(content);
-    } catch (error) {
-      throw new Error(`Failed to load .oraclerc: ${error.message}`);
-    }
+  if (['status', 'retrieve', 'cancel'].includes(command)) {
+    requestId = positional[0] || null;
+  } else if (sepIndex >= 0) {
+    patterns = positional.slice(0, sepIndex);
+    question = positional.slice(sepIndex + 1).join(' ');
+  } else {
+    patterns = positional;
   }
 
-  /**
-   * Main method: Ask the Oracle a question about code
-   * @param {Object} options
-   * @param {string[]} options.patterns - File patterns to include
-   * @param {string} options.question - Question to ask
-   * @param {boolean} options.skipConfirmation - Skip cost confirmation
-   * @returns {Promise<Object>} Oracle response
-   */
-  async ask({ patterns, question, skipConfirmation = false }) {
-    console.log(chalk.bold.cyan('\n╔═══════════════════════════════════════╗'));
-    console.log(chalk.bold.cyan('║      CONSULTING THE ORACLE...         ║'));
-    console.log(chalk.bold.cyan('╚═══════════════════════════════════════╝\n'));
-
-    // Phase 1: Pack code with Repomix
-    const spinner = ora('Packing code with Repomix...').start();
-
-    const repomix = new RepomixWrapper(this.config.repomix);
-    let packedResult;
-
-    try {
-      packedResult = await repomix.packAndRead(patterns);
-      spinner.succeed(
-        `Packed ${chalk.yellow(packedResult.metadata.fileCount)} files ` +
-        `(${chalk.yellow(packedResult.metadata.tokenCount.toLocaleString())} tokens)`
-      );
-    } catch (error) {
-      spinner.fail(`Failed to pack code: ${error.message}`);
-      throw error;
-    }
-
-    // Fail fast if no files matched
-    if (packedResult.metadata.fileCount === 0) {
-      console.log(chalk.red.bold('\n❌ No files matched the specified patterns\n'));
-      console.log(chalk.yellow('Patterns attempted:'));
-      patterns.forEach(p => console.log(chalk.yellow(`  - ${p}`)));
-      console.log(chalk.yellow(`\nWorking directory: ${process.cwd()}`));
-      console.log(chalk.yellow('\nPossible causes:'));
-      console.log(chalk.yellow('  - Patterns are relative but files are elsewhere'));
-      console.log(chalk.yellow('  - Files are excluded by .gitignore or .repomixignore'));
-      console.log(chalk.yellow('  - Pattern syntax is incorrect (use quotes around globs)'));
-      console.log(chalk.yellow('\nTest repomix manually with:'));
-      console.log(chalk.cyan(`  npx repomix --include "${patterns.join(',')}" --output test.txt\n`));
-      throw new Error('No files matched patterns');
-    }
-
-    // Phase 2: Estimate cost
-    const estimate = CostCalculator.estimateCost(
-      this.provider,
-      packedResult.metadata.tokenCount,
-      8000 // Default expected output
-    );
-
-    console.log(CostCalculator.formatEstimate(estimate, this.config.limits));
-
-    // Check limits
-    const limitCheck = CostCalculator.checkLimits(
-      estimate.estimatedCost,
-      this.config.limits
-    );
-
-    if (!limitCheck.withinLimit) {
-      console.log(chalk.red.bold(`\n❌ ${limitCheck.message}`));
-      throw new Error('Cost limit exceeded');
-    }
-
-    if (limitCheck.warning) {
-      console.log(chalk.yellow.bold(`\n⚠️  ${limitCheck.message}`));
-    }
-
-    // Confirmation (required unless explicitly skipped)
-    if (!skipConfirmation) {
-      const confirmed = await this.confirmSubmission(estimate.estimatedCost);
-      if (!confirmed) {
-        console.log(chalk.yellow('\n❌ Consultation cancelled by user\n'));
-        process.exit(0);
-      }
-    }
-
-    // Phase 3: Submit to Oracle
-    console.log(chalk.bold(`\nSubmitting to ${this.provider.getDisplayName()}...`));
-
-    let response;
-    const startTime = Date.now();
-
-    try {
-      response = await this.provider.submit(
-        packedResult.context,
-        question,
-        {
-          temperature: this.config.providers[this.provider.getName()]?.temperature
-        }
-      );
-
-      console.log(chalk.green(`✓ Submitted (Request ID: ${response.id})`));
-
-      // Track active request for cancellation
-      this.activeRequestId = response.id;
-
-      // Save request metadata immediately (for resume capability)
-      await this.saveToHistory(response, {
-        question,
-        patterns,
-        packedMetadata: packedResult.metadata
-      }, true); // partial save
-    } catch (error) {
-      console.log(chalk.red(`✗ Submission failed: ${error.message}`));
-      throw error;
-    }
-
-    try {
-      // Phase 4: Poll for completion
-      response = await this.pollForCompletion(response.id, startTime);
-
-      // Phase 5: Update history with final response
-      await this.saveToHistory(response, {
-        question,
-        patterns,
-        packedMetadata: packedResult.metadata
-      });
-
-      return response;
-    } finally {
-      // Clear active request ID
-      this.activeRequestId = null;
-    }
-  }
-
-  /**
-   * Confirm submission with user
-   * @param {number} estimatedCost - Estimated cost in USD
-   * @returns {Promise<boolean>} User confirmed
-   */
-  async confirmSubmission(estimatedCost) {
-    return new Promise((resolve) => {
-      const rl = createInterface({
-        input: process.stdin,
-        output: process.stdout
-      });
-
-      rl.question(
-        chalk.cyan.bold(`\n💰 Proceed with consultation (est. $${estimatedCost.toFixed(2)})? (y/N): `),
-        (answer) => {
-          rl.close();
-          resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes');
-        }
-      );
-    });
-  }
-
-  /**
-   * Poll for Oracle response completion
-   * @param {string} requestId - Request ID
-   * @param {number} startTime - Request start time
-   * @returns {Promise<Object>} Completed response
-   */
-  async pollForCompletion(requestId, startTime) {
-    const maxWaitMinutes = this.config.providers[this.provider.getName()]?.maxWaitMinutes || 25;
-    const maxWaitMs = maxWaitMinutes * 60 * 1000;
-    const pollInterval = 3000; // 3 seconds
-
-    console.log(chalk.gray(`\n⏳ Oracle is thinking... (may take up to ${maxWaitMinutes} minutes)\n`));
-
-    const spinner = ora('Polling for response...').start();
-    let lastUpdateTime = Date.now();
-
-    let backoffMs = 0;
-    let retryCount = 0;
-
-    while (Date.now() - startTime < maxWaitMs) {
-      await new Promise(resolve => setTimeout(resolve, pollInterval + backoffMs));
-
-      let response;
-      try {
-        response = await this.provider.poll(requestId);
-        // Reset backoff on successful poll
-        backoffMs = 0;
-        retryCount = 0;
-      } catch (error) {
-        // Handle rate limits and transient errors with exponential backoff
-        if (error.status === 429 || (error.status >= 500 && error.status < 600)) {
-          retryCount++;
-          backoffMs = Math.min(30000, 1000 * Math.pow(2, retryCount)); // Max 30s backoff
-          spinner.text = `Rate limited, backing off ${(backoffMs / 1000).toFixed(0)}s...`;
-          continue;
-        }
-        spinner.fail(`Polling error: ${error.message}`);
-        throw error;
-      }
-
-      // Update spinner text every minute
-      if (Date.now() - lastUpdateTime > 60000) {
-        const elapsed = ((Date.now() - startTime) / 60000).toFixed(1);
-        spinner.text = `Status: ${response.status} (${elapsed} min elapsed)`;
-        lastUpdateTime = Date.now();
-      }
-
-      // Check terminal states
-      if (response.status === 'completed') {
-        const elapsed = ((Date.now() - startTime) / 60000).toFixed(1);
-        spinner.succeed(`Response received after ${chalk.yellow(elapsed + ' minutes')}!`);
-        response.metadata.elapsed = Date.now() - startTime;
-        return response;
-      } else if (response.status === 'failed') {
-        spinner.fail('Oracle request failed');
-        throw new Error(`Oracle failed: ${response.error || 'Unknown error'}`);
-      } else if (response.status === 'cancelled') {
-        spinner.fail('Oracle request was cancelled');
-        throw new Error('Request cancelled');
-      }
-
-      // Status is queued or in_progress, continue polling
-    }
-
-    // Timeout exceeded - cancel the request
-    spinner.fail(`Timeout: exceeded ${maxWaitMinutes} minutes`);
-    console.log(chalk.yellow('Attempting to cancel the request...'));
-
-    try {
-      await this.provider.cancel(requestId);
-      console.log(chalk.yellow('Request cancelled due to timeout'));
-    } catch (error) {
-      console.log(chalk.yellow(`Warning: Could not cancel request: ${error.message}`));
-    }
-
-    throw new Error(`Oracle request timeout after ${maxWaitMinutes} minutes`);
-  }
-
-  /**
-   * Save Oracle consultation to history
-   * @param {Object} response - Oracle response
-   * @param {Object} metadata - Additional metadata
-   * @param {boolean} partial - Whether this is a partial save (in-progress)
-   */
-  async saveToHistory(response, metadata, partial = false) {
-    if (!this.config.ui?.saveHistory) {
-      return;
-    }
-
-    const historyDir = join(
-      process.cwd(),
-      this.config.ui.historyPath || '.claude/oracle-history'
-    );
-
-    // Create history directory if it doesn't exist
-    try {
-      await mkdir(historyDir, { recursive: true });
-    } catch (error) {
-      console.warn(chalk.yellow(`Warning: Could not create history directory: ${error.message}`));
-      return;
-    }
-
-    // Use request ID for consistent filename (enables updating)
-    const historyFile = join(historyDir, `oracle-${response.id}.json`);
-
-    const historyEntry = {
-      timestamp: new Date().toISOString(),
-      question: metadata.question,
-      patterns: metadata.patterns,
-      packedFiles: metadata.packedMetadata.fileCount,
-      inputTokens: response.usage?.inputTokens || 0,
-      provider: response.metadata?.provider || 'unknown',
-      model: response.metadata?.model || 'unknown',
-      cost: response.cost || 0,
-      elapsed: response.metadata?.elapsed || 0,
-      requestId: response.id,
-      status: partial ? response.status : 'completed',
-      response: response.output || '',
-      usage: response.usage || {}
-    };
-
-    try {
-      await writeFile(historyFile, JSON.stringify(historyEntry, null, 2));
-      console.log(chalk.gray(`\nHistory saved to: ${historyFile}`));
-    } catch (error) {
-      console.warn(chalk.yellow(`Warning: Could not save history: ${error.message}`));
-    }
-  }
-
-  /**
-   * Present Oracle response to user
-   * @param {Object} response - Oracle response
-   */
-  presentResponse(response) {
-    console.log(chalk.bold.cyan('\n╔═══════════════════════════════════════╗'));
-    console.log(chalk.bold.cyan('║         ORACLE RESPONSE READY         ║'));
-    console.log(chalk.bold.cyan('╚═══════════════════════════════════════╝\n'));
-
-    console.log(chalk.bold('Provider:'), chalk.cyan(response.metadata.provider));
-    console.log(chalk.bold('Model:'), chalk.cyan(response.metadata.model));
-    console.log(chalk.bold('Time elapsed:'), chalk.yellow(
-      (response.metadata.elapsed / 60000).toFixed(1) + ' minutes'
-    ));
-
-    // Cost breakdown
-    const actual = CostCalculator.calculateActual(response);
-    console.log(CostCalculator.formatActual(actual));
-
-    console.log(chalk.bold('\nResponse:\n'));
-    console.log(chalk.gray('━'.repeat(80)));
-    console.log(response.output);
-    console.log(chalk.gray('━'.repeat(80)));
-  }
+  return { command, flags, patterns, question, requestId, artifact, contextHash };
 }
 
-// CLI entry point
-async function main() {
-  const args = process.argv.slice(2);
+function jsonOut(command, data) {
+  console.log(JSON.stringify(buildEnvelope(command, data), null, 2));
+}
 
-  if (args.length === 0 || args[0] === '--help') {
-    console.log(chalk.bold('\nAsk the Oracle - Consult premium AI models for deep code analysis\n'));
-    console.log('Usage:');
-    console.log('  node oracle.js [--yes] <patterns> -- <question>');
-    console.log('\nOptions:');
-    console.log('  --yes    Skip cost confirmation prompt (use for CI/automation)');
-    console.log('\nExample:');
-    console.log('  node oracle.js "src/**/*.js" "docs/**/*.md" -- "How can I improve this codebase?"\n');
+function jsonError(command, error) {
+  console.log(JSON.stringify(buildErrorEnvelope(command, error), null, 2));
+}
+
+async function confirmPrompt(message) {
+  return new Promise(resolve => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(message, answer => {
+      rl.close();
+      resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes');
+    });
+  });
+}
+
+function timeSince(date) {
+  const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function showHelp() {
+  console.log(chalk.bold('\nAsk the Oracle - Deep code analysis with GPT-5.4 Pro\n'));
+  console.log('Commands:');
+  console.log('  estimate  <patterns>              Pack files and show cost estimate');
+  console.log('  submit    <patterns> -- <question> Submit and return request ID immediately');
+  console.log('  status    <requestId>              Check request status');
+  console.log('  retrieve  <requestId>              Get completed response');
+  console.log('  cancel    <requestId>              Cancel a running request');
+  console.log('  ask       <patterns> -- <question> Submit, wait, and show response (default)');
+  console.log('  list                               List recent request manifests');
+  console.log('  cleanup                            Remove stale artifact files from /tmp');
+  console.log('\nFlags:');
+  console.log('  --json                     Machine-readable JSON output (versioned envelope)');
+  console.log('  --yes                      Skip cost confirmation prompt');
+  console.log('  --artifact=<path>          Reuse packed artifact from estimate (submit only)');
+  console.log('  --context-hash=<hash>      Validate cached artifact (submit only)');
+  console.log('  --cancel-on-timeout        Cancel request on timeout instead of detaching (ask only)');
+  console.log('  --help                     Show this help');
+  console.log('  --version                  Show version');
+  console.log('\nExamples:');
+  console.log('  node oracle.js estimate "src/**/*.js"');
+  console.log('  node oracle.js submit --yes "src/**/*.js" -- "Review this code"');
+  console.log('  node oracle.js status resp_abc123');
+  console.log('  node oracle.js retrieve resp_abc123');
+  console.log('  node oracle.js ask --yes "src/**/*.js" -- "How can I improve this?"\n');
+}
+
+function showSensitiveWarning(files) {
+  if (files.length === 0) return;
+  console.log(chalk.red.bold('\n\u26a0\ufe0f  Sensitive files detected \u2014 these will be sent to the provider:'));
+  files.forEach(f => console.log(chalk.red(`  - ${f.path}`)));
+  console.log();
+}
+
+async function main() {
+  const { command, flags, patterns, question, requestId, artifact, contextHash } = parseArgs(process.argv.slice(2));
+
+  if (flags.version) {
+    console.log(VERSION);
     return;
   }
 
-  // Parse flags
-  let skipConfirmation = false;
-  let remainingArgs = args;
-
-  if (args[0] === '--yes') {
-    skipConfirmation = true;
-    remainingArgs = args.slice(1);
-  }
-
-  // Parse arguments (patterns before --, question after --)
-  const separatorIndex = remainingArgs.indexOf('--');
-
-  if (separatorIndex === -1) {
-    console.error(chalk.red('Error: Please separate patterns and question with --'));
-    console.log('Example: node oracle.js "src/**/*.js" -- "Your question here"');
-    process.exit(1);
-  }
-
-  const patterns = remainingArgs.slice(0, separatorIndex);
-  const question = remainingArgs.slice(separatorIndex + 1).join(' ');
-
-  if (patterns.length === 0) {
-    console.error(chalk.red('Error: No file patterns specified'));
-    process.exit(1);
-  }
-
-  if (!question) {
-    console.error(chalk.red('Error: No question specified'));
-    process.exit(1);
+  if (flags.help || (command === 'ask' && patterns.length === 0 && !requestId)) {
+    showHelp();
+    return;
   }
 
   try {
     const oracle = await new Oracle().init();
 
-    // Set up SIGINT handler to cancel requests on Ctrl-C
-    const sigintHandler = async () => {
-      if (oracle.activeRequestId) {
-        console.log(chalk.yellow('\n\n⚠️  Ctrl-C detected. Cancelling Oracle request...'));
-        try {
-          await oracle.provider.cancel(oracle.activeRequestId);
-          console.log(chalk.green('✓ Request cancelled successfully'));
-        } catch (error) {
-          console.log(chalk.yellow(`Warning: Could not cancel request: ${error.message}`));
-        }
+    // Show config warnings in human mode
+    if (!flags.json) {
+      const warnings = oracle.getWarnings();
+      if (warnings.length > 0) {
+        console.log(chalk.yellow('\n\u26a0\ufe0f  Configuration warnings:'));
+        warnings.forEach(w => console.log(chalk.yellow(`  - ${w}`)));
+        console.log();
       }
-      console.log(chalk.yellow('\nExiting...\n'));
-      process.exit(130); // Standard exit code for SIGINT
-    };
+    }
 
-    process.on('SIGINT', sigintHandler);
+    switch (command) {
 
-    const response = await oracle.ask({ patterns, question, skipConfirmation });
-    oracle.presentResponse(response);
+      // -- estimate --------------------------------------------------------
+      case 'estimate': {
+        const spinner = !flags.json ? ora('Packing code with Repomix...').start() : null;
+        const result = await oracle.estimate({ patterns });
+        spinner?.succeed(`Packed ${result.fileCount} files (${result.tokenCount.toLocaleString()} tokens)`);
 
-    // Remove SIGINT handler after successful completion
-    process.removeListener('SIGINT', sigintHandler);
+        if (flags.json) {
+          jsonOut(command, result);
+        } else {
+          console.log(CostCalculator.formatEstimate(result.estimate, oracle.config.limits, oracle.provider));
+          if (result.tokenCheck && !result.tokenCheck.withinLimit) {
+            console.log(chalk.red.bold(`  Context too large: ${result.tokenCheck.message}`));
+          } else if (result.tokenCheck) {
+            console.log(chalk.gray(`  Token headroom: ${result.tokenCheck.headroom.toLocaleString()} tokens remaining`));
+          }
+          showSensitiveWarning(result.sensitiveFiles);
+        }
+        break;
+      }
+
+      // -- submit ----------------------------------------------------------
+      case 'submit': {
+        // Estimate first for human confirmation
+        if (!flags.yes && !flags.json) {
+          const spinner = ora('Packing code with Repomix...').start();
+          const est = await oracle.estimate({ patterns });
+          spinner.succeed(`Packed ${est.fileCount} files (${est.tokenCount.toLocaleString()} tokens)`);
+          console.log(CostCalculator.formatEstimate(est.estimate, oracle.config.limits, oracle.provider));
+          showSensitiveWarning(est.sensitiveFiles);
+
+          if (!est.limitCheck.withinLimit) {
+            throw new OracleError('COST_LIMIT_EXCEEDED', `Cost limit exceeded: ${est.limitCheck.message}`);
+          }
+          if (est.limitCheck.warning) {
+            console.log(chalk.yellow.bold(`\u26a0\ufe0f  ${est.limitCheck.message}`));
+          }
+
+          const confirmed = await confirmPrompt(
+            chalk.cyan.bold(`\ud83d\udcb0 Proceed with consultation (est. $${est.estimate.estimatedCost.toFixed(2)})? (y/N): `)
+          );
+          if (!confirmed) {
+            console.log(chalk.yellow('\nCancelled.\n'));
+            return;
+          }
+        }
+
+        if (!flags.json) console.log(chalk.bold(`\nSubmitting to ${oracle.provider.getDisplayName()}...`));
+
+        const result = await oracle.submit({ patterns, question, artifactPath: artifact, contextHash });
+
+        if (flags.json) {
+          jsonOut(command, result);
+        } else {
+          console.log(chalk.green(`\u2713 Submitted (Request ID: ${result.requestId})`));
+          if (result.historyFile) console.log(chalk.gray(`History: ${result.historyFile}`));
+          console.log(chalk.cyan(`\nCheck status:  node oracle.js status ${result.requestId}`));
+          console.log(chalk.cyan(`Get response:  node oracle.js retrieve ${result.requestId}`));
+          console.log(chalk.cyan(`Cancel:        node oracle.js cancel ${result.requestId}\n`));
+        }
+        break;
+      }
+
+      // -- status ----------------------------------------------------------
+      case 'status': {
+        if (!requestId) {
+          throw new OracleError('VALIDATION_ERROR', 'No request ID specified. Usage: oracle.js status <requestId>');
+        }
+
+        const response = await oracle.status(requestId);
+
+        if (flags.json) {
+          jsonOut(command, { requestId, status: response.status, usage: response.usage, cost: response.cost });
+        } else {
+          const color = response.status === 'completed' ? chalk.green :
+                        response.status === 'failed' ? chalk.red : chalk.yellow;
+          console.log(`Status: ${color(response.status)}`);
+          if (response.usage?.inputTokens > 0) {
+            console.log(`Tokens: ${response.usage.inputTokens} in / ${response.usage.outputTokens} out`);
+          }
+          if (response.status === 'completed') {
+            console.log(chalk.cyan(`\nRetrieve with: node oracle.js retrieve ${requestId}\n`));
+          }
+        }
+        break;
+      }
+
+      // -- retrieve --------------------------------------------------------
+      case 'retrieve': {
+        if (!requestId) {
+          throw new OracleError('VALIDATION_ERROR', 'No request ID specified. Usage: oracle.js retrieve <requestId>');
+        }
+
+        const response = await oracle.retrieve(requestId);
+
+        if (flags.json) {
+          jsonOut(command, {
+            requestId, status: response.status, output: response.output,
+            usage: response.usage, cost: response.cost
+          });
+        } else if (response.status !== 'completed') {
+          console.log(chalk.yellow(`Request not yet completed (status: ${response.status})`));
+          console.log(chalk.cyan(`Try again later: node oracle.js retrieve ${requestId}\n`));
+        } else {
+          console.log(chalk.bold.cyan('\n\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557'));
+          console.log(chalk.bold.cyan('\u2551         ORACLE RESPONSE READY         \u2551'));
+          console.log(chalk.bold.cyan('\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\n'));
+
+          const actual = CostCalculator.calculateActual(response, oracle.provider);
+          console.log(CostCalculator.formatActual(actual));
+          console.log(chalk.gray('\u2501'.repeat(80)));
+          console.log(response.output);
+          console.log(chalk.gray('\u2501'.repeat(80)));
+        }
+        break;
+      }
+
+      // -- cancel ----------------------------------------------------------
+      case 'cancel': {
+        if (!requestId) {
+          throw new OracleError('VALIDATION_ERROR', 'No request ID specified. Usage: oracle.js cancel <requestId>');
+        }
+
+        const success = await oracle.cancel(requestId);
+
+        if (flags.json) {
+          jsonOut(command, { requestId, cancelled: success });
+        } else if (success) {
+          console.log(chalk.green(`\u2713 Request ${requestId} cancelled`));
+        } else {
+          console.log(chalk.yellow(`Could not cancel request ${requestId}`));
+        }
+        break;
+      }
+
+      // -- ask (default: submit + wait + present) -------------------------
+      case 'ask': {
+        if (patterns.length === 0) {
+          throw new OracleError('VALIDATION_ERROR', 'No file patterns specified');
+        }
+        if (!question) {
+          throw new OracleError('VALIDATION_ERROR', 'No question specified (use -- to separate patterns from question)');
+        }
+
+        // Phase 1: Estimate
+        if (!flags.json) {
+          console.log(chalk.bold.cyan('\n\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557'));
+          console.log(chalk.bold.cyan('\u2551      CONSULTING THE ORACLE...         \u2551'));
+          console.log(chalk.bold.cyan('\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\n'));
+        }
+
+        const spinner = !flags.json ? ora('Packing code with Repomix...').start() : null;
+        const est = await oracle.estimate({ patterns });
+        spinner?.succeed(`Packed ${est.fileCount} files (${est.tokenCount.toLocaleString()} tokens)`);
+
+        if (!flags.json) {
+          console.log(CostCalculator.formatEstimate(est.estimate, oracle.config.limits, oracle.provider));
+          showSensitiveWarning(est.sensitiveFiles);
+        }
+
+        if (!est.limitCheck.withinLimit) {
+          throw new OracleError('COST_LIMIT_EXCEEDED', `Cost limit exceeded: ${est.limitCheck.message}`);
+        }
+
+        // Phase 2: Confirm
+        if (!flags.yes && !flags.json) {
+          if (est.limitCheck.warning) {
+            console.log(chalk.yellow.bold(`\u26a0\ufe0f  ${est.limitCheck.message}`));
+          }
+          const confirmed = await confirmPrompt(
+            chalk.cyan.bold(`\ud83d\udcb0 Proceed (est. $${est.estimate.estimatedCost.toFixed(2)})? (y/N): `)
+          );
+          if (!confirmed) {
+            console.log(chalk.yellow('\nCancelled.\n'));
+            return;
+          }
+        }
+
+        // Phase 3: Submit (reuse artifact from estimate)
+        if (!flags.json) console.log(chalk.bold(`\nSubmitting to ${oracle.provider.getDisplayName()}...`));
+
+        const submitResult = await oracle.submit({
+          patterns,
+          question,
+          artifactPath: est.artifactPath,
+          contextHash: est.contextHash,
+        });
+
+        if (!flags.json) {
+          console.log(chalk.green(`\u2713 Submitted (Request ID: ${submitResult.requestId})`));
+          if (submitResult.historyFile) console.log(chalk.gray(`History: ${submitResult.historyFile}`));
+        }
+
+        // SIGINT handler — detach instead of cancel
+        const sigintHandler = () => {
+          console.log(chalk.yellow('\n\nDetaching from Oracle request (still running in background).'));
+          console.log(chalk.cyan(`  Check status:  node oracle.js status ${submitResult.requestId}`));
+          console.log(chalk.cyan(`  Get response:  node oracle.js retrieve ${submitResult.requestId}`));
+          console.log(chalk.cyan(`  Cancel:        node oracle.js cancel ${submitResult.requestId}\n`));
+          process.exit(130);
+        };
+        process.on('SIGINT', sigintHandler);
+
+        // Phase 4: Wait
+        let waitSpinner;
+        if (!flags.json) {
+          const maxMin = oracle.config.providers[oracle.provider.getName()]?.maxWaitMinutes || 25;
+          console.log(chalk.gray(`\n\u23f3 Oracle is thinking... (may take up to ${maxMin} minutes)\n`));
+          waitSpinner = ora('Polling for response...').start();
+        }
+
+        try {
+          const completed = await oracle.waitForCompletion(submitResult.requestId, {
+            cancelOnTimeout: flags.cancelOnTimeout,
+            onStatus: ({ status, elapsed, backoffMs }) => {
+              if (!waitSpinner) return;
+              if (backoffMs) {
+                waitSpinner.text = `Rate limited, backing off ${(backoffMs / 1000).toFixed(0)}s...`;
+              } else if (elapsed > 60000) {
+                waitSpinner.text = `Status: ${status} (${(elapsed / 60000).toFixed(1)} min elapsed)`;
+              }
+            }
+          });
+
+          // Handle detach-on-timeout
+          if (completed.status === 'detached') {
+            if (waitSpinner) {
+              waitSpinner.info('Timeout reached — detaching (request still running in background).');
+            }
+            if (flags.json) {
+              jsonOut(command, {
+                requestId: submitResult.requestId,
+                status: 'detached',
+                provider: submitResult.provider,
+              });
+            } else {
+              console.log(chalk.cyan(`\n  Check status:  node oracle.js status ${submitResult.requestId}`));
+              console.log(chalk.cyan(`  Get response:  node oracle.js retrieve ${submitResult.requestId}`));
+              console.log(chalk.cyan(`  Cancel:        node oracle.js cancel ${submitResult.requestId}\n`));
+            }
+            break;
+          }
+
+          if (waitSpinner) {
+            const elapsed = (completed.metadata.elapsed / 60000).toFixed(1);
+            waitSpinner.succeed(`Response received after ${chalk.yellow(elapsed + ' minutes')}!`);
+          }
+
+          // Save final history
+          await oracle.saveToHistory(completed, {
+            question, patterns,
+            packedMetadata: { fileCount: est.fileCount, tokenCount: est.tokenCount }
+          });
+
+          // Phase 5: Present
+          if (flags.json) {
+            jsonOut(command, {
+              requestId: submitResult.requestId,
+              status: 'completed',
+              output: completed.output,
+              usage: completed.usage,
+              cost: completed.cost,
+              elapsed: completed.metadata.elapsed,
+              provider: submitResult.provider
+            });
+          } else {
+            console.log(chalk.bold.cyan('\n\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557'));
+            console.log(chalk.bold.cyan('\u2551         ORACLE RESPONSE READY         \u2551'));
+            console.log(chalk.bold.cyan('\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\n'));
+
+            console.log(chalk.bold('Provider:'), chalk.cyan(completed.metadata.provider));
+            console.log(chalk.bold('Model:'), chalk.cyan(completed.metadata.model));
+            console.log(chalk.bold('Time elapsed:'), chalk.yellow(
+              (completed.metadata.elapsed / 60000).toFixed(1) + ' minutes'
+            ));
+
+            const actual = CostCalculator.calculateActual(completed, oracle.provider);
+            console.log(CostCalculator.formatActual(actual));
+
+            console.log(chalk.gray('\u2501'.repeat(80)));
+            console.log(completed.output);
+            console.log(chalk.gray('\u2501'.repeat(80)));
+          }
+        } finally {
+          process.removeListener('SIGINT', sigintHandler);
+        }
+        break;
+      }
+      // -- list ------------------------------------------------------------
+      case 'list': {
+        const manifests = await oracle.listManifests();
+
+        if (flags.json) {
+          jsonOut(command, { requests: manifests });
+        } else if (manifests.length === 0) {
+          console.log(chalk.gray('\nNo request manifests found.\n'));
+        } else {
+          console.log(chalk.bold('\nRecent Oracle Requests:\n'));
+          for (const m of manifests) {
+            const statusColor = m.status === 'completed' ? chalk.green :
+                                m.status === 'failed' ? chalk.red :
+                                m.status === 'cancelled' ? chalk.gray : chalk.yellow;
+            const shortId = m.requestId.length > 20 ? m.requestId.slice(0, 20) + '...' : m.requestId;
+            const ago = m.submittedAt ? timeSince(m.submittedAt) : 'unknown';
+            const preview = (m.question || '').slice(0, 50) + ((m.question || '').length > 50 ? '...' : '');
+            console.log(`  ${statusColor(m.status.padEnd(12))} ${chalk.cyan(shortId.padEnd(24))} ${chalk.gray(ago.padEnd(10))} ${preview}`);
+          }
+          console.log();
+        }
+        break;
+      }
+
+      // -- cleanup ---------------------------------------------------------
+      case 'cleanup': {
+        const cleaned = await oracle.cleanupStaleArtifacts();
+
+        if (flags.json) {
+          jsonOut(command, { cleanedCount: cleaned });
+        } else {
+          console.log(chalk.green(`\nCleaned ${cleaned} stale artifact file(s) from /tmp.\n`));
+        }
+        break;
+      }
+    }
   } catch (error) {
-    console.error(chalk.red(`\n❌ Error: ${error.message}`));
-    process.exit(1);
+    const exitCode = error instanceof OracleError ? error.exitCode : 1;
+    if (flags.json) {
+      jsonError(command, error);
+    } else {
+      console.error(chalk.red(`\n\u274c Error: ${error.message}`));
+    }
+    process.exit(exitCode);
   }
 }
 
-// Run if called directly
 if (import.meta.url === `file://${process.argv[1]}`) {
   main();
 }
 
-export { Oracle };
+export { parseArgs };

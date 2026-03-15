@@ -65,15 +65,6 @@ export class RepomixWrapper {
         }
       }
 
-      // If no files matched with comma string, try array as fallback
-      if (!result.packResult?.totalFiles) {
-        try {
-          result = await attemptPack(patternArray);
-        } catch (error) {
-          // Ignore errors on fallback attempt
-        }
-      }
-
       return {
         outputPath,
         tokenCount: result.packResult?.totalTokens || 0,
@@ -125,56 +116,4 @@ export class RepomixWrapper {
     };
   }
 
-  /**
-   * Estimate tokens without actually packing (preview)
-   * Uses repomix's token count tree feature
-   * @param {string[]} patterns - Glob patterns
-   * @param {string} workingDir - Working directory
-   * @returns {Promise<Object>} Token estimate by file
-   */
-  async estimateTokens(patterns, workingDir = process.cwd()) {
-    try {
-      // Run repomix with dry-run equivalent
-      const result = await runCli(
-        patterns,
-        workingDir,
-        {
-          output: `/tmp/oracle-estimate-${Date.now()}.xml`,
-          style: this.config.style,
-          compress: this.config.compress,
-          tokenCount: true,
-          quiet: true
-        }
-      );
-
-      return {
-        totalTokens: result.totalTokens || 0,
-        fileCount: result.fileCount || 0,
-        files: result.files || []
-      };
-    } catch (error) {
-      throw new Error(`Token estimation failed: ${error.message}`);
-    }
-  }
-
-  /**
-   * Get file patterns for common scenarios
-   * @param {string} scenario - Scenario name
-   * @returns {string[]} Glob patterns
-   */
-  static getCommonPatterns(scenario) {
-    const patterns = {
-      'all-code': ['**/*.{js,ts,jsx,tsx,py,java,go,rs,c,cpp,h,hpp}'],
-      'javascript': ['**/*.{js,jsx,mjs,cjs}', '!node_modules/**', '!dist/**', '!build/**'],
-      'typescript': ['**/*.{ts,tsx}', '!node_modules/**', '!dist/**', '!build/**'],
-      'python': ['**/*.py', '!venv/**', '!__pycache__/**', '!.venv/**'],
-      'source-only': ['src/**/*', 'lib/**/*'],
-      'with-tests': ['src/**/*', 'lib/**/*', 'tests/**/*', 'test/**/*'],
-      'config': ['*.{json,yaml,yml,toml,ini,conf}', '.*.{json,yaml,yml}'],
-      'docs': ['**/*.md', 'docs/**/*'],
-      'full-repo': ['**/*', '!node_modules/**', '!.git/**', '!dist/**', '!build/**']
-    };
-
-    return patterns[scenario] || patterns['all-code'];
-  }
 }

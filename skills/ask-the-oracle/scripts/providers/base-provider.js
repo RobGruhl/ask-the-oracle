@@ -24,7 +24,7 @@ export class BaseProvider {
 
   /**
    * Get the human-readable display name
-   * @returns {string} e.g., 'OpenAI GPT-5 Pro'
+   * @returns {string} e.g., 'OpenAI GPT-5.4 Pro'
    */
   getDisplayName() {
     throw new Error('getDisplayName() must be implemented by subclass');
@@ -32,7 +32,7 @@ export class BaseProvider {
 
   /**
    * Get the specific model being used
-   * @returns {string} e.g., 'gpt-5-pro', 'gemini-2.0-pro'
+   * @returns {string} e.g., 'gpt-5.4-pro', 'gemini-2.0-pro'
    */
   getModelName() {
     throw new Error('getModelName() must be implemented by subclass');
@@ -64,6 +64,14 @@ export class BaseProvider {
    */
   getMaxOutputTokens() {
     throw new Error('getMaxOutputTokens() must be implemented by subclass');
+  }
+
+  /**
+   * Get pricing information for display purposes
+   * @returns {{ input: number, output: number, reasoning: number }} Cost per 1M tokens in USD
+   */
+  getPricing() {
+    throw new Error('getPricing() must be implemented by subclass');
   }
 
   // ============================================================================
@@ -171,7 +179,8 @@ export class BaseProvider {
       'failed': 'failed',
       'error': 'failed',
       'cancelled': 'cancelled',
-      'canceled': 'cancelled'
+      'canceled': 'cancelled',
+      'incomplete': 'incomplete'
     };
 
     return statusMap[status?.toLowerCase()] || 'unknown';

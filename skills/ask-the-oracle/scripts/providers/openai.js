@@ -1,7 +1,7 @@
 /**
  * OpenAI Provider
  *
- * Implements Oracle interface for OpenAI's GPT-5 Pro via Responses API
+ * Implements Oracle interface for OpenAI's GPT-5.4 Pro via Responses API
  * Supports background mode for long-running requests (20+ minutes)
  */
 
@@ -13,9 +13,12 @@ export class OpenAIProvider extends BaseProvider {
     super(config);
 
     const apiKey = this._resolveApiKey();
+    const sdkTimeout = config.sdkTimeoutMinutes
+      ? config.sdkTimeoutMinutes * 60 * 1000
+      : undefined;
 
-    this.client = new OpenAI({ apiKey });
-    this.model = config.model || 'gpt-5-pro';
+    this.client = new OpenAI({ apiKey, timeout: sdkTimeout });
+    this.model = config.model || 'gpt-5.4-pro';
   }
 
   // ============================================================================
@@ -43,12 +46,12 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   getMaxContextTokens() {
-    // GPT-5 Pro supports up to 200k context
+    // GPT-5.4 Pro supports up to 200k context
     return 200000;
   }
 
   getMaxOutputTokens() {
-    // GPT-5 Pro supports up to 16k output
+    // GPT-5.4 Pro supports up to 16k output
     return 16000;
   }
 
@@ -60,9 +63,13 @@ export class OpenAIProvider extends BaseProvider {
     try {
       const combined = `${context}\n\n${question}`;
 
+      // background: true enables server-side queueing for long requests.
+      // Set useBackgroundMode: false in .oraclerc for synchronous mode (debugging only).
+      const useBackground = this.config.useBackgroundMode !== false;
+
       const response = await this.client.responses.create({
         model: this.model,
-        background: true, // Enable long-running mode
+        ...(useBackground ? { background: true, store: true } : {}),
         max_output_tokens: options.maxOutputTokens ?? 16000,
         input: [
           {
@@ -119,15 +126,17 @@ export class OpenAIProvider extends BaseProvider {
   // Cost & Response Normalization
   // ============================================================================
 
-  calculateCost(usage) {
-    // GPT-5 Pro pricing (November 2025)
-    const PRICE_INPUT = 15.00;      // per 1M tokens
-    const PRICE_REASONING = 15.00;  // per 1M tokens
-    const PRICE_OUTPUT = 120.00;    // per 1M tokens
+  getPricing() {
+    // GPT-5.4 Pro pricing (March 2026)
+    return { input: 30.00, output: 180.00, reasoning: 0 };
+  }
 
-    const inputCost = (usage.inputTokens / 1_000_000) * PRICE_INPUT;
-    const reasoningCost = ((usage.reasoningTokens || 0) / 1_000_000) * PRICE_REASONING;
-    const outputCost = (usage.outputTokens / 1_000_000) * PRICE_OUTPUT;
+  calculateCost(usage) {
+    const pricing = this.getPricing();
+
+    const inputCost = (usage.inputTokens / 1_000_000) * pricing.input;
+    const reasoningCost = ((usage.reasoningTokens || 0) / 1_000_000) * pricing.reasoning;
+    const outputCost = (usage.outputTokens / 1_000_000) * pricing.output;
 
     return inputCost + reasoningCost + outputCost;
   }
@@ -136,7 +145,7 @@ export class OpenAIProvider extends BaseProvider {
     const usage = {
       inputTokens: rawResponse.usage?.input_tokens || 0,
       outputTokens: rawResponse.usage?.output_tokens || 0,
-      reasoningTokens: rawResponse.usage?.reasoning_tokens || 0,
+      reasoningTokens: rawResponse.usage?.output_tokens_details?.reasoning_tokens || 0,
       totalTokens: rawResponse.usage?.total_tokens || 0
     };
 

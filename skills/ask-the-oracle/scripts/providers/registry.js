@@ -49,10 +49,12 @@ class ProviderRegistry {
   getConfigured(config) {
     const configured = [];
 
-    // OpenAI provider (V1.0)
-    if (config.providers?.openai?.apiKey && config.providers.openai.enabled !== false) {
+    // OpenAI provider
+    const openaiConfig = config.providers?.openai;
+
+    if (openaiConfig && openaiConfig.enabled !== false && openaiConfig.apiKey) {
       try {
-        configured.push(new OpenAIProvider(config.providers.openai));
+        configured.push(new OpenAIProvider(openaiConfig));
       } catch (error) {
         console.warn(`Failed to initialize OpenAI provider: ${error.message}`);
       }
@@ -113,6 +115,16 @@ class ProviderRegistry {
    */
   hasConfigured(config) {
     return this.getConfigured(config).length > 0;
+  }
+
+  /**
+   * Get a specific configured provider by name
+   * @param {Object} config - Configuration object from .oraclerc
+   * @param {string} name - Provider name (e.g., 'openai')
+   * @returns {BaseProvider|null}
+   */
+  getByName(config, name) {
+    return this.getConfigured(config).find(p => p.getName() === name) || null;
   }
 
   /**

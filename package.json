@@ -1,11 +1,11 @@
 {
   "name": "ask-the-oracle",
-  "version": "1.0.0",
-  "description": "Claude Code skill for consulting premium AI models (GPT-5 Pro, Gemini, Opus) for deep code analysis",
+  "version": "1.4.0",
+  "description": "Claude Code skill for deep code analysis using GPT-5.4 Pro via OpenAI",
   "type": "module",
   "main": "skills/ask-the-oracle/scripts/oracle.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node skills/ask-the-oracle/scripts/tests/run-tests.js"
   },
   "keywords": [
     "claude-code",
@@ -19,12 +19,11 @@
   "author": "Rob Gruhl",
   "license": "MIT",
   "dependencies": {
-    "chalk": "5.3.0",
-    "openai": "4.104.0",
-    "ora": "8.1.1",
-    "repomix": "0.2.43"
+    "chalk": "^5.6.2",
+    "openai": "^6.29.0",
+    "ora": "^9.3.0",
+    "repomix": "^1.12.0"
   },
-  "devDependencies": {},
   "engines": {
     "node": ">=18.0.0",
     "bun": ">=1.0.0"
