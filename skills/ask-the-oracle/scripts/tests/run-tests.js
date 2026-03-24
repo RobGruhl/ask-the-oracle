@@ -663,6 +663,41 @@ describe('parseArgs', () => {
     const result = parseArgs(['cleanup']);
     assert(result.command === 'cleanup', `expected cleanup, got ${result.command}`);
   });
+
+  it('parses --source-dir flag', () => {
+    const result = parseArgs(['estimate', '--source-dir=/tmp/other-repo', 'src/**/*.cs']);
+    assert(result.sourceDir === '/tmp/other-repo', `expected /tmp/other-repo, got ${result.sourceDir}`);
+    assert(result.patterns[0] === 'src/**/*.cs');
+  });
+
+  it('parses single --extra-context flag', () => {
+    const result = parseArgs(['ask', '--extra-context=/tmp/notes.md', 'src/**', '--', 'question']);
+    assert(Array.isArray(result.extraContext), 'extraContext should be array');
+    assert(result.extraContext.length === 1, `expected 1, got ${result.extraContext.length}`);
+    assert(result.extraContext[0] === '/tmp/notes.md');
+  });
+
+  it('parses multiple --extra-context flags', () => {
+    const result = parseArgs(['ask', '--extra-context=/tmp/a.md', '--extra-context=/tmp/b.md', '--extra-context=/tmp/c.md', '--', 'question']);
+    assert(result.extraContext.length === 3, `expected 3, got ${result.extraContext.length}`);
+    assert(result.extraContext[0] === '/tmp/a.md');
+    assert(result.extraContext[1] === '/tmp/b.md');
+    assert(result.extraContext[2] === '/tmp/c.md');
+  });
+
+  it('parses combined --source-dir and --extra-context', () => {
+    const result = parseArgs(['ask', '--source-dir=/tmp/repo', '--extra-context=/tmp/doc.md', 'src/**', '--', 'question']);
+    assert(result.sourceDir === '/tmp/repo');
+    assert(result.extraContext.length === 1);
+    assert(result.extraContext[0] === '/tmp/doc.md');
+    assert(result.patterns[0] === 'src/**');
+  });
+
+  it('defaults sourceDir to null and extraContext to empty array', () => {
+    const result = parseArgs(['estimate', 'src/**']);
+    assert(result.sourceDir === null, `expected null, got ${result.sourceDir}`);
+    assert(Array.isArray(result.extraContext) && result.extraContext.length === 0, 'extraContext should be empty array');
+  });
 });
 
 // ============================================================================
@@ -1113,6 +1148,163 @@ describe('Integration: Estimate pipeline', () => {
     assert(sidecarContent !== null, 'sidecar file should exist');
     const sidecar = JSON.parse(sidecarContent);
     assert(sidecar.contextHash === result.contextHash, 'sidecar hash should match');
+
+    // Clean up
+    const { unlink: del } = await import('fs/promises');
+    await del(result.artifactPath).catch(() => {});
+    await del(result.sidecarPath).catch(() => {});
+  });
+
+  itAsync('estimate with extra-context file produces combined result', async () => {
+    const { writeFile: wf, unlink: del } = await import('fs/promises');
+    const tmpFile = '/tmp/oracle-test-extra-context.md';
+    await wf(tmpFile, '# Test Extra Context\n\nThis is research context for the oracle.\n'.repeat(10));
+
+    const oracle = new Oracle();
+    oracle.config = {
+      defaultProvider: 'openai',
+      providers: { mock: {} },
+      repomix: { style: 'xml', compress: true, includeLineNumbers: true, removeComments: false },
+      limits: { maxCostPerRequest: 10, warnCostThreshold: 5 },
+      ui: {},
+    };
+    oracle.provider = new MockProvider();
+
+    const result = await oracle.estimate({ patterns: ['package.json'], extraContext: [tmpFile] });
+
+    // Extra-context file should be counted
+    assert(result.fileCount >= 2, `expected >= 2 files (1 code + 1 extra), got ${result.fileCount}`);
+    assert(result.tokenCount > 0, `expected positive tokens, got ${result.tokenCount}`);
+    assert(typeof result.contextHash === 'string' && result.contextHash.length === 16);
+    assert(typeof result.artifactPath === 'string');
+
+    // Clean up
+    await del(result.artifactPath).catch(() => {});
+    await del(result.sidecarPath).catch(() => {});
+    await del(tmpFile).catch(() => {});
+  });
+
+  itAsync('estimate with only extra-context (no patterns) skips repomix', async () => {
+    const { writeFile: wf, unlink: del } = await import('fs/promises');
+    const tmpFile = '/tmp/oracle-test-extra-only.md';
+    await wf(tmpFile, 'Some research context for analysis');
+
+    const oracle = new Oracle();
+    oracle.config = {
+      defaultProvider: 'openai',
+      providers: { mock: {} },
+      repomix: { style: 'xml', compress: true, includeLineNumbers: true, removeComments: false },
+      limits: { maxCostPerRequest: 10, warnCostThreshold: 5 },
+      ui: {},
+    };
+    oracle.provider = new MockProvider();
+
+    const result = await oracle.estimate({ patterns: [], extraContext: [tmpFile] });
+
+    assert(result.fileCount === 1, `expected 1 file (extra-context only), got ${result.fileCount}`);
+    assert(result.tokenCount > 0, `expected positive tokens, got ${result.tokenCount}`);
+    assert(typeof result.contextHash === 'string' && result.contextHash.length === 16);
+
+    // Clean up
+    await del(result.artifactPath).catch(() => {});
+    await del(result.sidecarPath).catch(() => {});
+    await del(tmpFile).catch(() => {});
+  });
+
+  itAsync('estimate with nonexistent extra-context throws VALIDATION_ERROR', async () => {
+    const oracle = new Oracle();
+    oracle.config = {
+      defaultProvider: 'openai',
+      providers: { mock: {} },
+      repomix: { style: 'xml', compress: true, includeLineNumbers: true, removeComments: false },
+      limits: {},
+      ui: {},
+    };
+    oracle.provider = new MockProvider();
+
+    try {
+      await oracle.estimate({ patterns: ['package.json'], extraContext: ['/tmp/nonexistent-file-xyz.md'] });
+      assert(false, 'should have thrown');
+    } catch (err) {
+      assert(err.code === 'VALIDATION_ERROR', `expected VALIDATION_ERROR, got ${err.code}`);
+      assert(err.message.includes('not found'), `expected "not found" in message, got: ${err.message}`);
+    }
+  });
+
+  itAsync('estimate context hash is deterministic', async () => {
+    const { writeFile: wf, unlink: del } = await import('fs/promises');
+    const tmpFile = '/tmp/oracle-test-hash-determinism.md';
+    await wf(tmpFile, 'Deterministic content test');
+
+    const oracle = new Oracle();
+    oracle.config = {
+      defaultProvider: 'openai',
+      providers: { mock: {} },
+      repomix: { style: 'xml', compress: true, includeLineNumbers: true, removeComments: false },
+      limits: { maxCostPerRequest: 10, warnCostThreshold: 5 },
+      ui: {},
+    };
+    oracle.provider = new MockProvider();
+
+    const result1 = await oracle.estimate({ patterns: [], extraContext: [tmpFile] });
+    const result2 = await oracle.estimate({ patterns: [], extraContext: [tmpFile] });
+
+    assert(result1.contextHash === result2.contextHash,
+      `hashes should match: ${result1.contextHash} vs ${result2.contextHash}`);
+
+    // Clean up
+    await del(result1.artifactPath).catch(() => {});
+    await del(result1.sidecarPath).catch(() => {});
+    await del(result2.artifactPath).catch(() => {});
+    await del(result2.sidecarPath).catch(() => {});
+    await del(tmpFile).catch(() => {});
+  });
+
+  itAsync('estimate sensitive file detection includes extra-context paths', async () => {
+    const { writeFile: wf, unlink: del } = await import('fs/promises');
+    const tmpFile = '/tmp/oracle-test-credentials.env';
+    await wf(tmpFile, 'SECRET=foo');
+
+    const oracle = new Oracle();
+    oracle.config = {
+      defaultProvider: 'openai',
+      providers: { mock: {} },
+      repomix: { style: 'xml', compress: true, includeLineNumbers: true, removeComments: false },
+      limits: { maxCostPerRequest: 10, warnCostThreshold: 5 },
+      ui: {},
+    };
+    oracle.provider = new MockProvider();
+
+    const result = await oracle.estimate({ patterns: [], extraContext: [tmpFile] });
+
+    assert(result.sensitiveFiles.length >= 1, `expected at least 1 sensitive file, got ${result.sensitiveFiles.length}`);
+    assert(result.sensitiveFiles.some(f => f.path.includes('.env')), 'should detect .env in extra-context');
+
+    // Clean up
+    await del(result.artifactPath).catch(() => {});
+    await del(result.sidecarPath).catch(() => {});
+    await del(tmpFile).catch(() => {});
+  });
+
+  itAsync('estimate with sourceDir packs from that directory', async () => {
+    const oracle = new Oracle();
+    oracle.config = {
+      defaultProvider: 'openai',
+      providers: { mock: {} },
+      repomix: { style: 'xml', compress: true, includeLineNumbers: true, removeComments: false },
+      limits: { maxCostPerRequest: 10, warnCostThreshold: 5 },
+      ui: {},
+    };
+    oracle.provider = new MockProvider();
+
+    // Use the oracle project's own root as sourceDir
+    const result = await oracle.estimate({
+      patterns: ['package.json'],
+      sourceDir: process.cwd(),
+    });
+
+    assert(result.fileCount >= 1, `expected >= 1 file, got ${result.fileCount}`);
+    assert(result.tokenCount > 0);
 
     // Clean up
     const { unlink: del } = await import('fs/promises');

@@ -116,6 +116,49 @@ All errors return an envelope with `ok: false`. Check `error.code`:
 
 To cancel: `node ${CLAUDE_SKILL_DIR}/scripts/oracle.js cancel <requestId>`
 
+## Multi-Source Workflow
+
+When a question involves code from a different repository, design documents, research notes, or other prose alongside code, use `--source-dir` and `--extra-context`:
+
+### `--source-dir=<path>`
+Pack code files from a directory other than the current working directory.
+
+### `--extra-context=<file>` (repeatable)
+Prepend additional files (design docs, research, prose) before the packed code. Can be specified multiple times.
+
+### Examples
+
+**Cross-repo analysis** — analyze code in another project:
+```bash
+cd <project-root> && node ${CLAUDE_SKILL_DIR}/scripts/oracle.js estimate --json \
+  --source-dir=$HOME/Projects/other-repo "src/**/*.cs"
+```
+
+**Code + design docs** — include design documents alongside code:
+```bash
+cd <project-root> && node ${CLAUDE_SKILL_DIR}/scripts/oracle.js ask --yes --json \
+  --source-dir=$HOME/Projects/target-repo \
+  --extra-context=$HOME/Projects/target-repo/docs/architecture.md \
+  --extra-context=$HOME/Projects/target-repo/docs/design-decisions.md \
+  "src/**/*.ts" -- "Evaluate this architecture"
+```
+
+**Extra-context only** — no code, just documents for analysis:
+```bash
+cd <project-root> && node ${CLAUDE_SKILL_DIR}/scripts/oracle.js ask --yes --json \
+  --extra-context=/tmp/research-notes.md \
+  --extra-context=/tmp/technical-spec.md \
+  -- "Analyze these documents and identify gaps"
+```
+
+### Workflow for multi-source questions
+1. Write any prose/research to temporary files (e.g., `/tmp/research.md`)
+2. Use `--source-dir` to point at the target codebase
+3. Use `--extra-context` (repeatable) for each supplementary document
+4. File patterns still work normally (resolved against `--source-dir`)
+5. Extra-context content is prepended before packed code in the context sent to the provider
+6. Token counting and cost estimation cover the full combined context
+
 ## Important Notes
 
 - **Cost**: Typically $0.05-$2 per request depending on codebase size and response length

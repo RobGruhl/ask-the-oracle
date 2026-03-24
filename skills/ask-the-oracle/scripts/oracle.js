@@ -27,6 +27,8 @@ function parseArgs(argv) {
   let artifact = null;
   let contextHash = null;
   let continueFrom = null;
+  let sourceDir = null;
+  const extraContext = [];
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -38,6 +40,8 @@ function parseArgs(argv) {
     else if (arg.startsWith('--artifact=')) artifact = arg.slice('--artifact='.length);
     else if (arg.startsWith('--context-hash=')) contextHash = arg.slice('--context-hash='.length);
     else if (arg.startsWith('--continue=')) continueFrom = arg.slice('--continue='.length);
+    else if (arg.startsWith('--source-dir=')) sourceDir = arg.slice('--source-dir='.length);
+    else if (arg.startsWith('--extra-context=')) extraContext.push(arg.slice('--extra-context='.length));
     else positional.push(arg);
   }
 
@@ -60,7 +64,7 @@ function parseArgs(argv) {
     patterns = positional;
   }
 
-  return { command, flags, patterns, question, requestId, artifact, contextHash, continueFrom };
+  return { command, flags, patterns, question, requestId, artifact, contextHash, continueFrom, sourceDir, extraContext };
 }
 
 function jsonOut(command, data) {
@@ -109,6 +113,8 @@ function showHelp() {
   console.log('  --artifact=<path>          Reuse packed artifact from estimate (submit only)');
   console.log('  --context-hash=<hash>      Validate cached artifact (submit only)');
   console.log('  --continue=<requestId>     Continue conversation from a previous response');
+  console.log('  --source-dir=<path>        Pack files from a different directory (default: cwd)');
+  console.log('  --extra-context=<file>     Include extra context file (repeatable, prepended to code)');
   console.log('  --cancel-on-timeout        Cancel request on timeout instead of detaching (ask only)');
   console.log('  --help                     Show this help');
   console.log('  --version                  Show version');
@@ -118,7 +124,11 @@ function showHelp() {
   console.log('  node oracle.js submit --yes --continue=resp_abc123 -- "Follow up question"');
   console.log('  node oracle.js status resp_abc123');
   console.log('  node oracle.js retrieve resp_abc123');
-  console.log('  node oracle.js ask --yes "src/**/*.js" -- "How can I improve this?"\n');
+  console.log('  node oracle.js ask --yes "src/**/*.js" -- "How can I improve this?"');
+  console.log('\n  Cross-repo with extra context:');
+  console.log('  node oracle.js ask --yes --source-dir=~/other-project \\');
+  console.log('    --extra-context=./docs/design.md --extra-context=./notes.md \\');
+  console.log('    "src/**/*.ts" -- "Analyze this architecture"\n');
 }
 
 function showSensitiveWarning(files) {
@@ -129,14 +139,14 @@ function showSensitiveWarning(files) {
 }
 
 async function main() {
-  const { command, flags, patterns, question, requestId, artifact, contextHash, continueFrom } = parseArgs(process.argv.slice(2));
+  const { command, flags, patterns, question, requestId, artifact, contextHash, continueFrom, sourceDir, extraContext } = parseArgs(process.argv.slice(2));
 
   if (flags.version) {
     console.log(VERSION);
     return;
   }
 
-  if (flags.help || (command === 'ask' && patterns.length === 0 && !requestId)) {
+  if (flags.help || (command === 'ask' && patterns.length === 0 && extraContext.length === 0 && !requestId)) {
     showHelp();
     return;
   }
@@ -158,8 +168,9 @@ async function main() {
 
       // -- estimate --------------------------------------------------------
       case 'estimate': {
-        const spinner = !flags.json ? ora('Packing code with Repomix...').start() : null;
-        const result = await oracle.estimate({ patterns });
+        const spinnerLabel = patterns.length > 0 ? 'Packing code with Repomix...' : 'Preparing context...';
+        const spinner = !flags.json ? ora(spinnerLabel).start() : null;
+        const result = await oracle.estimate({ patterns, sourceDir, extraContext });
         spinner?.succeed(`Packed ${result.fileCount} files (${result.tokenCount.toLocaleString()} tokens)`);
 
         if (flags.json) {
@@ -180,8 +191,9 @@ async function main() {
       case 'submit': {
         // Skip estimate/confirm for continuations — no packing involved
         if (!continueFrom && !flags.yes && !flags.json) {
-          const spinner = ora('Packing code with Repomix...').start();
-          const est = await oracle.estimate({ patterns });
+          const spinnerLabel = patterns.length > 0 ? 'Packing code with Repomix...' : 'Preparing context...';
+          const spinner = ora(spinnerLabel).start();
+          const est = await oracle.estimate({ patterns, sourceDir, extraContext });
           spinner.succeed(`Packed ${est.fileCount} files (${est.tokenCount.toLocaleString()} tokens)`);
           console.log(CostCalculator.formatEstimate(est.estimate, oracle.config.limits, oracle.provider));
           showSensitiveWarning(est.sensitiveFiles);
@@ -210,7 +222,7 @@ async function main() {
           }
         }
 
-        const result = await oracle.submit({ patterns, question, artifactPath: artifact, contextHash, continueFrom });
+        const result = await oracle.submit({ patterns, question, artifactPath: artifact, contextHash, continueFrom, sourceDir, extraContext });
 
         if (flags.json) {
           jsonOut(command, result);
@@ -298,8 +310,8 @@ async function main() {
 
       // -- ask (default: submit + wait + present) -------------------------
       case 'ask': {
-        if (patterns.length === 0) {
-          throw new OracleError('VALIDATION_ERROR', 'No file patterns specified');
+        if (patterns.length === 0 && extraContext.length === 0) {
+          throw new OracleError('VALIDATION_ERROR', 'No file patterns or extra-context specified');
         }
         if (!question) {
           throw new OracleError('VALIDATION_ERROR', 'No question specified (use -- to separate patterns from question)');
@@ -312,8 +324,9 @@ async function main() {
           console.log(chalk.bold.cyan('\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\n'));
         }
 
-        const spinner = !flags.json ? ora('Packing code with Repomix...').start() : null;
-        const est = await oracle.estimate({ patterns });
+        const askSpinnerLabel = patterns.length > 0 ? 'Packing code with Repomix...' : 'Preparing context...';
+        const spinner = !flags.json ? ora(askSpinnerLabel).start() : null;
+        const est = await oracle.estimate({ patterns, sourceDir, extraContext });
         spinner?.succeed(`Packed ${est.fileCount} files (${est.tokenCount.toLocaleString()} tokens)`);
 
         if (!flags.json) {
@@ -347,6 +360,8 @@ async function main() {
           question,
           artifactPath: est.artifactPath,
           contextHash: est.contextHash,
+          sourceDir,
+          extraContext,
         });
 
         if (!flags.json) {

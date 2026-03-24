@@ -7,7 +7,7 @@
 
 import { readFile, writeFile, mkdir, readdir, unlink } from 'fs/promises';
 import { existsSync, statSync } from 'fs';
-import { join } from 'path';
+import { join, resolve, basename } from 'path';
 import { createHash } from 'crypto';
 import { registry } from './providers/registry.js';
 import { RepomixWrapper } from './repomix-wrapper.js';
@@ -211,39 +211,101 @@ class Oracle {
   }
 
   /**
-   * Pack files and estimate cost (no submission).
-   * Returns artifactPath and contextHash for reuse by submit().
+   * Read and concatenate extra-context files. Returns { text, tokenCount, files }.
    */
-  async estimate({ patterns }) {
-    if (!patterns || patterns.length === 0) {
-      throw new OracleError('VALIDATION_ERROR', 'No file patterns specified. Usage: oracle.js estimate <patterns>');
+  async _readExtraContext(extraContext = []) {
+    if (!extraContext || extraContext.length === 0) {
+      return { text: '', tokenCount: 0, files: [] };
     }
 
+    const sections = [];
+    const files = [];
+    let totalChars = 0;
+
+    for (const filePath of extraContext) {
+      const resolved = resolve(filePath);
+      if (!existsSync(resolved)) {
+        throw new OracleError('VALIDATION_ERROR', `Extra-context file not found: ${filePath}`);
+      }
+      const content = await readFile(resolved, 'utf-8');
+      const name = basename(resolved);
+      sections.push(`<!-- Extra context: ${name} -->\n${content}`);
+      files.push({ path: resolved, tokens: Math.ceil(content.length / 4) });
+      totalChars += content.length;
+    }
+
+    const text = sections.join('\n\n');
+    const tokenCount = Math.ceil(totalChars / 4);
+    return { text, tokenCount, files };
+  }
+
+  /**
+   * Pack files and estimate cost (no submission).
+   * Returns artifactPath and contextHash for reuse by submit().
+   *
+   * @param {Object} opts
+   * @param {string[]} opts.patterns - Glob patterns for file selection
+   * @param {string} [opts.sourceDir] - Directory to pack from (default: cwd)
+   * @param {string[]} [opts.extraContext] - Extra context file paths to prepend
+   */
+  async estimate({ patterns, sourceDir, extraContext }) {
+    const hasPatterns = patterns && patterns.length > 0;
+    const hasExtraContext = extraContext && extraContext.length > 0;
+
+    if (!hasPatterns && !hasExtraContext) {
+      throw new OracleError('VALIDATION_ERROR', 'No file patterns or extra-context specified. Usage: oracle.js estimate <patterns>');
+    }
+
+    // Read extra-context files
+    const extra = await this._readExtraContext(extraContext);
+
+    // Pack code files (skip repomix if only extra-context)
     const repomix = new RepomixWrapper(this.config.repomix);
-    const packed = await repomix.packAndRead(patterns);
+    let packed;
+    if (hasPatterns) {
+      packed = await repomix.packAndRead(patterns, sourceDir || process.cwd());
+    } else {
+      packed = { context: '', metadata: { tokenCount: 0, fileCount: 0, files: [], outputPath: null } };
+    }
+
+    // Combine: extra-context prepended before code
+    const combinedContext = extra.text
+      ? (packed.context ? `${extra.text}\n\n${packed.context}` : extra.text)
+      : packed.context;
+    const combinedTokens = packed.metadata.tokenCount + extra.tokenCount;
+    const combinedFiles = [...extra.files, ...(packed.metadata.files || [])];
+    const combinedFileCount = (packed.metadata.fileCount || 0) + extra.files.length;
 
     const estimate = CostCalculator.estimateCost(
-      this.provider, packed.metadata.tokenCount
+      this.provider, combinedTokens
     );
 
     const limitCheck = CostCalculator.checkLimits(
       estimate.estimatedCost, this.config.limits
     );
 
-    const sensitive = this.checkSensitiveFiles(packed.metadata.files || []);
+    const sensitive = this.checkSensitiveFiles(combinedFiles);
 
-    const tokenCheck = CostCalculator.checkTokenLimits(this.provider, packed.metadata.tokenCount);
+    const tokenCheck = CostCalculator.checkTokenLimits(this.provider, combinedTokens);
 
     // Compute a content hash for cache validation
-    const contextHash = createHash('sha256').update(packed.context).digest('hex').slice(0, 16);
+    const contextHash = createHash('sha256').update(combinedContext).digest('hex').slice(0, 16);
 
-    // Write sidecar manifest alongside XML artifact
-    const sidecarPath = packed.metadata.outputPath.replace(/\.xml$/, '.manifest.json');
+    // Write combined context to artifact file
+    const outputPath = packed.metadata.outputPath || join('/tmp', `oracle-context-${Date.now()}.xml`);
+    if (combinedContext !== packed.context) {
+      await writeFile(outputPath, combinedContext);
+    }
+
+    // Write sidecar manifest alongside artifact
+    const sidecarPath = outputPath.replace(/\.xml$/, '.manifest.json');
     const sidecar = {
       contextHash,
-      tokenCount: packed.metadata.tokenCount,
-      fileCount: packed.metadata.fileCount,
-      files: packed.metadata.files || [],
+      tokenCount: combinedTokens,
+      fileCount: combinedFileCount,
+      files: combinedFiles,
+      extraContext: extraContext || [],
+      sourceDir: sourceDir || null,
       provider: {
         name: this.provider.getName(),
         model: this.provider.getModelName(),
@@ -256,9 +318,9 @@ class Oracle {
     this.cleanupStaleArtifacts().catch(() => {});
 
     return {
-      fileCount: packed.metadata.fileCount,
-      tokenCount: packed.metadata.tokenCount,
-      files: packed.metadata.files || [],
+      fileCount: combinedFileCount,
+      tokenCount: combinedTokens,
+      files: combinedFiles,
       estimate,
       limitCheck,
       tokenCheck,
@@ -268,7 +330,7 @@ class Oracle {
         displayName: this.provider.getDisplayName(),
         model: this.provider.getModelName()
       },
-      artifactPath: packed.metadata.outputPath,
+      artifactPath: outputPath,
       sidecarPath,
       contextHash
     };
@@ -284,15 +346,20 @@ class Oracle {
    * @param {string} [opts.artifactPath] - Pre-packed artifact from estimate()
    * @param {string} [opts.contextHash] - Hash to validate cached artifact
    * @param {string} [opts.continueFrom] - Previous request ID for multi-turn conversation
+   * @param {string} [opts.sourceDir] - Directory to pack from (default: cwd)
+   * @param {string[]} [opts.extraContext] - Extra context file paths to prepend
    */
-  async submit({ patterns, question, artifactPath, contextHash, continueFrom }) {
+  async submit({ patterns, question, artifactPath, contextHash, continueFrom, sourceDir, extraContext }) {
     // When continuing a conversation, skip packing — just send the question
     if (continueFrom) {
-      return this._submitContinuation(continueFrom, question, patterns);
+      return this._submitContinuation(continueFrom, question, patterns, sourceDir);
     }
 
-    if (!patterns || patterns.length === 0) {
-      throw new OracleError('VALIDATION_ERROR', 'No file patterns specified');
+    const hasPatterns = patterns && patterns.length > 0;
+    const hasExtraContext = extraContext && extraContext.length > 0;
+
+    if (!hasPatterns && !hasExtraContext) {
+      throw new OracleError('VALIDATION_ERROR', 'No file patterns or extra-context specified');
     }
     if (!question) {
       throw new OracleError('VALIDATION_ERROR', 'No question specified (use -- to separate patterns from question)');
@@ -310,7 +377,7 @@ class Oracle {
         if (sidecarContent) {
           const sidecar = JSON.parse(sidecarContent);
           if (sidecar.contextHash === contextHash) {
-            const context = await repomix.readPacked(artifactPath);
+            const context = await readFile(artifactPath, 'utf-8');
             const verifyHash = createHash('sha256').update(context).digest('hex').slice(0, 16);
             if (verifyHash === contextHash) {
               // Full reuse — no Repomix call at all
@@ -329,11 +396,18 @@ class Oracle {
 
         // Sidecar missing/invalid — fall back to hash-only validation
         if (!packed) {
-          const context = await repomix.readPacked(artifactPath);
+          const context = await readFile(artifactPath, 'utf-8');
           const verifyHash = createHash('sha256').update(context).digest('hex').slice(0, 16);
           if (verifyHash === contextHash) {
-            const result = await repomix.pack(patterns);
-            packed = { context, metadata: { ...result, outputPath: artifactPath } };
+            packed = {
+              context,
+              metadata: {
+                tokenCount: Math.ceil(context.length / 4),
+                fileCount: 0,
+                files: [],
+                outputPath: artifactPath,
+              },
+            };
           }
         }
       } catch {
@@ -342,10 +416,32 @@ class Oracle {
     }
 
     if (!packed) {
-      packed = await repomix.packAndRead(patterns);
+      // Fresh pack with extra-context composition
+      const extra = await this._readExtraContext(extraContext);
+
+      let repomixPacked;
+      if (hasPatterns) {
+        repomixPacked = await repomix.packAndRead(patterns, sourceDir || process.cwd());
+      } else {
+        repomixPacked = { context: '', metadata: { tokenCount: 0, fileCount: 0, files: [], outputPath: null } };
+      }
+
+      const combinedContext = extra.text
+        ? (repomixPacked.context ? `${extra.text}\n\n${repomixPacked.context}` : extra.text)
+        : repomixPacked.context;
+
+      packed = {
+        context: combinedContext,
+        metadata: {
+          tokenCount: repomixPacked.metadata.tokenCount + extra.tokenCount,
+          fileCount: (repomixPacked.metadata.fileCount || 0) + extra.files.length,
+          files: [...extra.files, ...(repomixPacked.metadata.files || [])],
+          outputPath: repomixPacked.metadata.outputPath || join('/tmp', `oracle-context-${Date.now()}.xml`),
+        },
+      };
     }
 
-    if (packed.metadata.fileCount === 0) {
+    if (packed.metadata.fileCount === 0 && !packed.context) {
       throw new OracleError('VALIDATION_ERROR', 'No files matched the specified patterns');
     }
 
@@ -418,7 +514,7 @@ class Oracle {
    * Continue a conversation by chaining to a previous response.
    * Optionally packs new files if patterns are provided (hybrid mode).
    */
-  async _submitContinuation(continueFrom, question, patterns = []) {
+  async _submitContinuation(continueFrom, question, patterns = [], sourceDir = null) {
     if (!question) {
       throw new OracleError('VALIDATION_ERROR', 'No question specified for continuation');
     }
@@ -432,7 +528,7 @@ class Oracle {
     let packedMetadata = { fileCount: 0, tokenCount: 0, files: [] };
     if (patterns.length > 0) {
       const repomix = new RepomixWrapper(this.config.repomix);
-      const packed = await repomix.packAndRead(patterns);
+      const packed = await repomix.packAndRead(patterns, sourceDir || process.cwd());
       context = packed.context;
       packedMetadata = packed.metadata;
     }
