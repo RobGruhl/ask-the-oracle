@@ -4,7 +4,7 @@
   "providers": {
     "openai": {
       "apiKey": "$OPENAI_API_KEY",
-      "model": "gpt-5.4-pro",
+      "model": "gpt-5.5-pro",
       "maxWaitMinutes": 120,
       "temperature": 0.2,
       "enabled": true

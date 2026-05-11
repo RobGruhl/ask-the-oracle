@@ -1,6 +1,6 @@
 # Ask the Oracle
 
-A Claude Code skill for deep code analysis using GPT-5.4 Pro's extended reasoning.
+A Claude Code skill for deep code analysis using GPT-5.5 Pro's extended reasoning.
 
 > "I think currently probably state-of-the-art model that I go to is the GPT Pro. And that's a very, very powerful model. So if I actually have 20 minutes, I will copy-paste my entire repo and I go to GPT Pro, the Oracle, for like some questions. And often it's not too bad and surprisingly good compared to what existed a year ago."
 >
@@ -9,7 +9,7 @@ A Claude Code skill for deep code analysis using GPT-5.4 Pro's extended reasonin
 ## What It Does
 
 1. Packs your code with Repomix (smart file selection, token counting)
-2. Submits to GPT-5.4 Pro via OpenAI Responses API
+2. Submits to GPT-5.5 Pro via OpenAI Responses API
 3. Handles 10-20 minute response times with lifecycle commands
 4. Warns about sensitive files before sending to third parties
 5. Tracks costs and saves consultation history
@@ -36,7 +36,7 @@ Note: `.oraclerc` goes in the **project root** where you run the Oracle, not in 
 ### Prerequisites
 
 - Node.js 18+ (or Bun 1.0+)
-- OpenAI API key with GPT-5.4 Pro access
+- OpenAI API key with GPT-5.5 Pro access
 
 ## Usage
 
@@ -109,7 +109,7 @@ Create `.oraclerc` in your project root (see `.oraclerc.example`):
   "providers": {
     "openai": {
       "apiKey": "$OPENAI_API_KEY",
-      "model": "gpt-5.4-pro",
+      "model": "gpt-5.5-pro",
       "maxWaitMinutes": 25,
       "enabled": true
     }
@@ -129,7 +129,7 @@ Create `.oraclerc` in your project root (see `.oraclerc.example`):
 | Subsystem | $2.00 - $4.00 |
 | Large codebase | $5.00 - $10.00 |
 
-Pricing: $30/M input, $180/M output (GPT-5.4 Pro, March 2026)
+Pricing: $30/M input, $180/M output (GPT-5.5 Pro, March 2026)
 
 ## Project Structure
 
@@ -158,7 +158,7 @@ ask-the-oracle/
 
 **No files matched** -- Use quotes around globs: `"src/**/*.js"`. Check `.gitignore` exclusions.
 
-**Invalid API key** -- Verify `OPENAI_API_KEY` env var or key in `.oraclerc`. Confirm GPT-5.4 Pro access.
+**Invalid API key** -- Verify `OPENAI_API_KEY` env var or key in `.oraclerc`. Confirm GPT-5.5 Pro access.
 
 **Timeout** -- By default, `ask` detaches on timeout (the request keeps running in background). Use `--cancel-on-timeout` for old cancel behavior. You can also increase `maxWaitMinutes` in `.oraclerc`, or use `submit` + `status` + `retrieve` instead. Also consider `sdkTimeoutMinutes` for synchronous requests.
 
@@ -181,7 +181,7 @@ MIT
 
 - **Andrej Karpathy** for the Oracle concept
 - **Repomix** for codebase packaging
-- **OpenAI** for GPT-5.4 Pro and Responses API
+- **OpenAI** for GPT-5.5 Pro and Responses API
 - **Anthropic** for Claude Code
 
 ---

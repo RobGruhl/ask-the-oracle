@@ -1,7 +1,7 @@
 {
   "name": "ask-the-oracle",
   "version": "1.4.0",
-  "description": "Deep code analysis using GPT-5.4 Pro's 20-minute extended reasoning. Lifecycle commands keep Claude responsive.",
+  "description": "Deep code analysis using GPT-5.5 Pro's 20-minute extended reasoning. Lifecycle commands keep Claude responsive.",
   "author": {
     "name": "Rob Gruhl",
     "url": "https://github.com/robgruhl"
@@ -12,7 +12,7 @@
   "keywords": [
     "claude-code",
     "code-analysis",
-    "gpt-5.4-pro",
+    "gpt-5.5-pro",
     "openai",
     "oracle",
     "architecture-review",

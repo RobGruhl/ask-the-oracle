@@ -97,7 +97,7 @@ function timeSince(date) {
 }
 
 function showHelp() {
-  console.log(chalk.bold('\nAsk the Oracle - Deep code analysis with GPT-5.4 Pro\n'));
+  console.log(chalk.bold('\nAsk the Oracle - Deep code analysis with GPT-5.5 Pro\n'));
   console.log('Commands:');
   console.log('  estimate  <patterns>              Pack files and show cost estimate');
   console.log('  submit    <patterns> -- <question> Submit and return request ID immediately');
