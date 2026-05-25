@@ -1,7 +1,7 @@
 ---
 name: ask-the-oracle
 description: Consult GPT-5.5 Pro for deep code analysis that takes 10-20 minutes of extended reasoning. Use this skill whenever the user asks for architecture review, security audit, debugging complex issues, comprehensive code review, performance analysis, or expert-level analysis across multiple files. Also use when the user says "ask the oracle", "deep dive", "deep analysis", "expert analysis", "consult the oracle", or wants a second opinion from another model. Do NOT use for simple questions you can answer directly.
-allowed-tools: Read, Grep, Glob, Bash, AskUserQuestion
+allowed-tools: Read, Grep, Glob, Bash, AskUserQuestion, Skill
 ---
 
 # Ask the Oracle
@@ -56,7 +56,7 @@ If `data.sensitiveFiles` is non-empty, warn the user that those files will be se
 2. If cost > $5 warn the user. If cost > configured limit, don't proceed without approval.
 3. Confirm with user: show estimated cost, remind them it takes ~10-20 minutes.
 
-### Phase 4: Submit
+### Phase 4: Submit and Auto-Poll
 
 Submit the question, reusing the packed artifact from estimate:
 
@@ -72,17 +72,30 @@ The `--yes` flag skips the cost prompt (you already confirmed with the user).
 Parse the envelope. On success, read `data.requestId`.
 
 Tell the user immediately:
-> "Oracle consultation submitted to GPT-5.5 Pro (Request ID: <id>). This takes 10-20 minutes. Ask me 'Check on the Oracle' anytime for status."
+> "Oracle consultation submitted to GPT-5.5 Pro (Request ID: <id>). Polling every minute for completion."
 
-### Phase 5: Check Status
+Then **immediately** invoke the `/loop` skill via the Skill tool to auto-poll, passing the request ID and project root in the loop prompt so each tick has the context it needs:
 
-When the user checks progress:
+```
+Skill({
+  skill: "loop",
+  args: "1m Check Oracle status for request <requestId>. Run `cd <project-root> && node ${CLAUDE_SKILL_DIR}/scripts/oracle.js status --json <requestId>` and parse the envelope. If data.status is 'completed', run retrieve (see Phase 6), present results, then call CronList to find the job whose prompt mentions '<requestId>' and CronDelete to stop the loop. If data.status is 'failed' or 'cancelled', report briefly and stop the loop the same way. Otherwise (queued/in_progress), report status in one line and let the next tick fire."
+})
+```
+
+The loop is session-only — it dies when Claude exits. That is the right scope: the user is waiting for results in this session anyway.
+
+### Phase 5: Check Status (per loop tick or on demand)
+
+Whether fired by a /loop tick or by the user asking, status is checked the same way:
 
 ```bash
 cd <project-root> && node ${CLAUDE_SKILL_DIR}/scripts/oracle.js status --json <requestId>
 ```
 
-Report `data.status`: `queued`, `in_progress`, `completed`, or `failed`.
+Report `data.status`: `queued`, `in_progress`, `completed`, `failed`, or `cancelled`.
+
+If you were fired by a loop tick (the prompt mentions a specific requestId), see Phase 4 for the cancellation logic — terminal states must call CronDelete to stop further ticks.
 
 ### Phase 6: Retrieve and Present Results
 
