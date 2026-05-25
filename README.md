@@ -129,7 +129,7 @@ Create `.oraclerc` in your project root (see `.oraclerc.example`):
 | Subsystem | $2.00 - $4.00 |
 | Large codebase | $5.00 - $10.00 |
 
-Pricing: $30/M input, $180/M output (GPT-5.5 Pro, March 2026)
+Pricing: $30/M input, $180/M output (GPT-5.5 Pro, April 2026)
 
 ## Project Structure
 
