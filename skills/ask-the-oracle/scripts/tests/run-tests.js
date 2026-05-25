@@ -1354,7 +1354,7 @@ describe('Integration: OpenAI provider construction', () => {
     assert(provider.getName() === 'openai');
     assert(provider.getModelName() === 'gpt-5.5-pro');
     assert(provider.getDisplayName() === 'OpenAI GPT-5.5-PRO');
-    assert(provider.getMaxContextTokens() === 200000);
+    assert(provider.getMaxContextTokens() === 1050000);
     assert(provider.getMaxOutputTokens() === 128000);
     assert(provider.supportsBackgroundMode() === true);
   });

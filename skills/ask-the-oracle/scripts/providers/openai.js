@@ -46,8 +46,8 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   getMaxContextTokens() {
-    // GPT-5.5 Pro supports up to 200k context
-    return 200000;
+    // GPT-5.5 Pro supports up to 1050k context
+    return 1050000;
   }
 
   getMaxOutputTokens() {
