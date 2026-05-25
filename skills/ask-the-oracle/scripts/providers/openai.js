@@ -1,7 +1,7 @@
 /**
  * OpenAI Provider
  *
- * Implements Oracle interface for OpenAI's GPT-5.4 Pro via Responses API
+ * Implements Oracle interface for OpenAI's GPT-5.5 Pro via Responses API
  * Supports background mode for long-running requests (20+ minutes)
  */
 
@@ -18,7 +18,7 @@ export class OpenAIProvider extends BaseProvider {
       : undefined;
 
     this.client = new OpenAI({ apiKey, timeout: sdkTimeout });
-    this.model = config.model || 'gpt-5.4-pro';
+    this.model = config.model || 'gpt-5.5-pro';
   }
 
   // ============================================================================
@@ -46,12 +46,12 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   getMaxContextTokens() {
-    // GPT-5.4 Pro supports up to 200k context
-    return 200000;
+    // GPT-5.5 Pro supports up to 1050k context
+    return 1050000;
   }
 
   getMaxOutputTokens() {
-    // GPT-5.4 Pro supports up to 128k output
+    // GPT-5.5 Pro supports up to 128k output
     return 128000;
   }
 
@@ -130,7 +130,7 @@ export class OpenAIProvider extends BaseProvider {
   // ============================================================================
 
   getPricing() {
-    // GPT-5.4 Pro pricing (March 2026)
+    // GPT-5.5 Pro pricing (April 2026)
     return { input: 30.00, output: 180.00, reasoning: 0 };
   }
 

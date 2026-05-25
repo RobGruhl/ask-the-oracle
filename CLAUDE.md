@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Ask the Oracle is a Claude Code skill that enables deep code analysis by consulting GPT-5.4 Pro via OpenAI. The project uses Repomix to package code and the OpenAI Responses API for analysis requests.
+Ask the Oracle is a Claude Code skill that enables deep code analysis by consulting GPT-5.5 Pro via OpenAI. The project uses Repomix to package code and the OpenAI Responses API for analysis requests.
 
 **Current Status**: V1.4 production-ready. Distributed as a Claude Code plugin.
 
@@ -21,7 +21,7 @@ Ask the Oracle is a Claude Code skill that enables deep code analysis by consult
 ### Provider System
 
 - **BaseProvider** (`providers/base-provider.js`): Abstract interface all providers implement
-- **OpenAI Provider** (`providers/openai.js`): GPT-5.4 Pro via Responses API. Configurable SDK timeout via `sdkTimeoutMinutes`.
+- **OpenAI Provider** (`providers/openai.js`): GPT-5.5 Pro via Responses API. Configurable SDK timeout via `sdkTimeoutMinutes`.
 - **Provider Registry** (`providers/registry.js`): Manages provider instances and selection
 
 ### Key Components
@@ -136,7 +136,7 @@ If either assumption does not hold, you will need to:
 - **Actual Cost**: After completion, display real cost breakdown
 - **Privacy**: Sensitive files (.env, .pem, .key, credentials) trigger warnings before submission
 
-GPT-5.4 Pro pricing (March 2026): $30/M input, $180/M output
+GPT-5.5 Pro pricing (April 2026): $30/M input, $180/M output
 
 ## Project Structure
 

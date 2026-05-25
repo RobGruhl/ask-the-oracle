@@ -197,7 +197,7 @@ describe('CostCalculator.calculateActual', () => {
     const response = {
       usage: { inputTokens: 50000, outputTokens: 2000, reasoningTokens: 1000, totalTokens: 53000 },
       cost: 1.50,
-      metadata: { provider: 'openai', model: 'gpt-5.4-pro' }
+      metadata: { provider: 'openai', model: 'gpt-5.5-pro' }
     };
 
     const actual = CostCalculator.calculateActual(response);
@@ -280,7 +280,7 @@ describe('ConfigValidator.validate', () => {
   it('accepts valid standard OpenAI configuration', () => {
     ConfigValidator.validate({
       defaultProvider: 'openai',
-      providers: { openai: { apiKey: 'sk-test', model: 'gpt-5.4-pro', enabled: true } }
+      providers: { openai: { apiKey: 'sk-test', model: 'gpt-5.5-pro', enabled: true } }
     });
     assert(true);
   });
@@ -289,7 +289,7 @@ describe('ConfigValidator.validate', () => {
     try {
       ConfigValidator.validate({
         defaultProvider: 'openai',
-        providers: { openai: { model: 'gpt-5.4-pro', enabled: true } }
+        providers: { openai: { model: 'gpt-5.5-pro', enabled: true } }
       });
       assert(false, 'Should have thrown');
     } catch (e) {
@@ -300,7 +300,7 @@ describe('ConfigValidator.validate', () => {
   it('rejects missing defaultProvider', () => {
     try {
       ConfigValidator.validate({
-        providers: { openai: { apiKey: 'sk-test', model: 'gpt-5.4-pro', enabled: true } }
+        providers: { openai: { apiKey: 'sk-test', model: 'gpt-5.5-pro', enabled: true } }
       });
       assert(false, 'Should have thrown');
     } catch (e) {
@@ -324,7 +324,7 @@ describe('ConfigValidator.validate', () => {
     try {
       ConfigValidator.validate({
         defaultProvider: 'openai',
-        providers: { openai: { apiKey: 'sk-test', model: 'gpt-5.4-pro', enabled: false } }
+        providers: { openai: { apiKey: 'sk-test', model: 'gpt-5.5-pro', enabled: false } }
       });
       assert(false, 'Should have thrown');
     } catch (e) {
@@ -348,7 +348,7 @@ describe('ConfigValidator.validate', () => {
     try {
       ConfigValidator.validate({
         defaultProvider: 'openai',
-        providers: { openai: { apiKey: 'sk-test', model: 'gpt-5.4-pro', enabled: true, temperature: 3.0 } }
+        providers: { openai: { apiKey: 'sk-test', model: 'gpt-5.5-pro', enabled: true, temperature: 3.0 } }
       });
       assert(false, 'Should have thrown');
     } catch (e) {
@@ -360,7 +360,7 @@ describe('ConfigValidator.validate', () => {
     try {
       ConfigValidator.validate({
         defaultProvider: 'openai',
-        providers: { openai: { apiKey: 'sk-test', model: 'gpt-5.4-pro', enabled: true } },
+        providers: { openai: { apiKey: 'sk-test', model: 'gpt-5.5-pro', enabled: true } },
         limits: { maxCostPerRequest: -5 }
       });
       assert(false, 'Should have thrown');
@@ -374,7 +374,7 @@ describe('ConfigValidator.getWarnings', () => {
   it('warns about unset environment variable API keys', () => {
     delete process.env.__ORACLE_TEST_NONEXISTENT__;
     const warnings = ConfigValidator.getWarnings({
-      providers: { openai: { apiKey: '$__ORACLE_TEST_NONEXISTENT__', model: 'gpt-5.4-pro', enabled: true } }
+      providers: { openai: { apiKey: '$__ORACLE_TEST_NONEXISTENT__', model: 'gpt-5.5-pro', enabled: true } }
     });
     assert(warnings.length > 0);
     assert(warnings[0].includes('__ORACLE_TEST_NONEXISTENT__'));
@@ -383,7 +383,7 @@ describe('ConfigValidator.getWarnings', () => {
   it('warns about sync mode disabled', () => {
     const warnings = ConfigValidator.getWarnings({
       providers: {
-        openai: { apiKey: 'sk-test', model: 'gpt-5.4-pro', enabled: true, useBackgroundMode: false }
+        openai: { apiKey: 'sk-test', model: 'gpt-5.5-pro', enabled: true, useBackgroundMode: false }
       }
     });
     assert(warnings.some(w => w.includes('useBackgroundMode')));
@@ -527,7 +527,7 @@ describe('stripJsonComments', () => {
   "providers": {
     "openai": {
       "apiKey": "$OPENAI_API_KEY",
-      "model": "gpt-5.4-pro",
+      "model": "gpt-5.5-pro",
       // "maxWaitMinutes": 120,
       "enabled": true
     }
@@ -980,7 +980,7 @@ describe('ConfigValidator: background mode warnings', () => {
   it('warns when useBackgroundMode is false', () => {
     const warnings = ConfigValidator.getWarnings({
       providers: {
-        openai: { apiKey: 'sk-test', model: 'gpt-5.4-pro', enabled: true, useBackgroundMode: false }
+        openai: { apiKey: 'sk-test', model: 'gpt-5.5-pro', enabled: true, useBackgroundMode: false }
       }
     });
     assert(warnings.some(w => w.includes('useBackgroundMode')),
@@ -990,7 +990,7 @@ describe('ConfigValidator: background mode warnings', () => {
   it('no warning when useBackgroundMode is true or absent', () => {
     const warnings1 = ConfigValidator.getWarnings({
       providers: {
-        openai: { apiKey: 'sk-test', model: 'gpt-5.4-pro', enabled: true, useBackgroundMode: true }
+        openai: { apiKey: 'sk-test', model: 'gpt-5.5-pro', enabled: true, useBackgroundMode: true }
       }
     });
     assert(!warnings1.some(w => w.includes('useBackgroundMode')),
@@ -998,7 +998,7 @@ describe('ConfigValidator: background mode warnings', () => {
 
     const warnings2 = ConfigValidator.getWarnings({
       providers: {
-        openai: { apiKey: 'sk-test', model: 'gpt-5.4-pro', enabled: true }
+        openai: { apiKey: 'sk-test', model: 'gpt-5.5-pro', enabled: true }
       }
     });
     assert(!warnings2.some(w => w.includes('useBackgroundMode')),
@@ -1009,7 +1009,7 @@ describe('ConfigValidator: background mode warnings', () => {
     try {
       ConfigValidator.validate({
         defaultProvider: 'openai',
-        providers: { openai: { apiKey: 'sk-test', model: 'gpt-5.4-pro', enabled: true, sdkTimeoutMinutes: -5 } }
+        providers: { openai: { apiKey: 'sk-test', model: 'gpt-5.5-pro', enabled: true, sdkTimeoutMinutes: -5 } }
       });
       assert(false, 'Should have thrown');
     } catch (e) {
@@ -1020,7 +1020,7 @@ describe('ConfigValidator: background mode warnings', () => {
   it('accepts valid sdkTimeoutMinutes', () => {
     ConfigValidator.validate({
       defaultProvider: 'openai',
-      providers: { openai: { apiKey: 'sk-test', model: 'gpt-5.4-pro', enabled: true, sdkTimeoutMinutes: 30 } }
+      providers: { openai: { apiKey: 'sk-test', model: 'gpt-5.5-pro', enabled: true, sdkTimeoutMinutes: 30 } }
     });
     assert(true);
   });
@@ -1349,12 +1349,12 @@ describe('Integration: OpenAI provider construction', () => {
   it('creates standard OpenAI provider with API key', () => {
     const provider = new OpenAIProvider({
       apiKey: 'sk-test-key-123',
-      model: 'gpt-5.4-pro',
+      model: 'gpt-5.5-pro',
     });
     assert(provider.getName() === 'openai');
-    assert(provider.getModelName() === 'gpt-5.4-pro');
-    assert(provider.getDisplayName() === 'OpenAI GPT-5.4-PRO');
-    assert(provider.getMaxContextTokens() === 200000);
+    assert(provider.getModelName() === 'gpt-5.5-pro');
+    assert(provider.getDisplayName() === 'OpenAI GPT-5.5-PRO');
+    assert(provider.getMaxContextTokens() === 1050000);
     assert(provider.getMaxOutputTokens() === 128000);
     assert(provider.supportsBackgroundMode() === true);
   });
@@ -1362,7 +1362,7 @@ describe('Integration: OpenAI provider construction', () => {
   it('defaults useBackgroundMode to true', () => {
     const provider = new OpenAIProvider({
       apiKey: 'sk-test',
-      model: 'gpt-5.4-pro',
+      model: 'gpt-5.5-pro',
     });
     // useBackgroundMode defaults to true when not set
     assert(provider.config.useBackgroundMode !== false,
@@ -1372,7 +1372,7 @@ describe('Integration: OpenAI provider construction', () => {
   it('calculates cost correctly', () => {
     const provider = new OpenAIProvider({
       apiKey: 'sk-test',
-      model: 'gpt-5.4-pro',
+      model: 'gpt-5.5-pro',
     });
     const pricing = provider.getPricing();
     assert(pricing.input === 30, `expected input $30/M, got ${pricing.input}`);
@@ -1386,7 +1386,7 @@ describe('Integration: OpenAI provider construction', () => {
   it('normalizes response status correctly', () => {
     const provider = new OpenAIProvider({
       apiKey: 'sk-test',
-      model: 'gpt-5.4-pro',
+      model: 'gpt-5.5-pro',
     });
     const normalized = provider.normalizeResponse({
       id: 'resp_test',

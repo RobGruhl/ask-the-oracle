@@ -1,7 +1,7 @@
 {
   "name": "ask-the-oracle",
   "version": "1.4.0",
-  "description": "Claude Code skill for deep code analysis using GPT-5.4 Pro via OpenAI",
+  "description": "Claude Code skill for deep code analysis using GPT-5.5 Pro via OpenAI",
   "type": "module",
   "main": "skills/ask-the-oracle/scripts/oracle.js",
   "scripts": {

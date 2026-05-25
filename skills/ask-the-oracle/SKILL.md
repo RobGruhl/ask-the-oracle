@@ -1,12 +1,12 @@
 ---
 name: ask-the-oracle
-description: Consult GPT-5.4 Pro for deep code analysis that takes 10-20 minutes of extended reasoning. Use this skill whenever the user asks for architecture review, security audit, debugging complex issues, comprehensive code review, performance analysis, or expert-level analysis across multiple files. Also use when the user says "ask the oracle", "deep dive", "deep analysis", "expert analysis", "consult the oracle", or wants a second opinion from another model. Do NOT use for simple questions you can answer directly.
+description: Consult GPT-5.5 Pro for deep code analysis that takes 10-20 minutes of extended reasoning. Use this skill whenever the user asks for architecture review, security audit, debugging complex issues, comprehensive code review, performance analysis, or expert-level analysis across multiple files. Also use when the user says "ask the oracle", "deep dive", "deep analysis", "expert analysis", "consult the oracle", or wants a second opinion from another model. Do NOT use for simple questions you can answer directly.
 allowed-tools: Read, Grep, Glob, Bash, AskUserQuestion
 ---
 
 # Ask the Oracle
 
-Consult GPT-5.4 Pro as an "Oracle" for complex code questions requiring 10-20 minutes of deep reasoning.
+Consult GPT-5.5 Pro as an "Oracle" for complex code questions requiring 10-20 minutes of deep reasoning.
 
 ## JSON API
 
@@ -52,7 +52,7 @@ If `data.sensitiveFiles` is non-empty, warn the user that those files will be se
 
 ### Phase 3: Confirm with User
 
-1. GPT-5.4 Pro pricing: $30/M input, $180/M output. Typical cost: $2-10.
+1. GPT-5.5 Pro pricing: $30/M input, $180/M output. Typical cost: $2-10.
 2. If cost > $5 warn the user. If cost > configured limit, don't proceed without approval.
 3. Confirm with user: show estimated cost, remind them it takes ~10-20 minutes.
 
@@ -72,7 +72,7 @@ The `--yes` flag skips the cost prompt (you already confirmed with the user).
 Parse the envelope. On success, read `data.requestId`.
 
 Tell the user immediately:
-> "Oracle consultation submitted to GPT-5.4 Pro (Request ID: <id>). This takes 10-20 minutes. Ask me 'Check on the Oracle' anytime for status."
+> "Oracle consultation submitted to GPT-5.5 Pro (Request ID: <id>). This takes 10-20 minutes. Ask me 'Check on the Oracle' anytime for status."
 
 ### Phase 5: Check Status
 
@@ -162,7 +162,7 @@ cd <project-root> && node ${CLAUDE_SKILL_DIR}/scripts/oracle.js ask --yes --json
 ## Important Notes
 
 - **Cost**: Typically $0.05-$2 per request depending on codebase size and response length
-- **Time**: 10-20 minutes (GPT-5.4 Pro extended reasoning)
+- **Time**: 10-20 minutes (GPT-5.5 Pro extended reasoning)
 - **Privacy**: Code is sent to OpenAI (retained per their policy)
 - **Security assumptions**: Designed for a single-user machine. Artifacts and history are stored as plaintext. See CLAUDE.md "Security Assumptions" for details.
 - **History**: Saved to `.claude/oracle-history/`
@@ -178,7 +178,7 @@ Users need `.oraclerc` in their project root:
   "providers": {
     "openai": {
       "apiKey": "$OPENAI_API_KEY",
-      "model": "gpt-5.4-pro",
+      "model": "gpt-5.5-pro",
       "enabled": true
     }
   },
